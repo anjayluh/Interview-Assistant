@@ -1,0 +1,9 @@
+{
+  "scenario": "Real Uvicorn server idle with one WebSocket; no audio or cloud calls. Measurement client runs in the same process, so these include its overhead.",
+  "wall_seconds": 5.0,
+  "cpu_seconds": 0.01474,
+  "cpu_percent_one_core": 0.295,
+  "peak_resident_mib": 78.38,
+  "platform": "darwin",
+  "limitations": "Peak RSS includes startup/imports, not current memory. Browser memory excluded. Active capture and paid API load not measured."
+}

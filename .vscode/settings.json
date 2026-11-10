@@ -1,0 +1,10 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "files.watcherExclude": {"**/.venv/**": true, "**/__pycache__/**": true, "**/.pytest_cache/**": true, "**/.runtime/**": true},
+  "search.exclude": {"**/.venv": true, "**/__pycache__": true, "**/.pytest_cache": true, "**/.runtime": true},
+  "python.analysis.diagnosticMode": "openFilesOnly",
+  "python.analysis.indexing": false,
+  "python.testing.pytestEnabled": false,
+  "python.testing.autoTestDiscoverOnSaveEnabled": false,
+  "git.autofetch": false
+}

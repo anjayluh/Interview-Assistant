@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Interview Assistant</title><link rel="stylesheet" href="/static/style.css"><script src="/static/app.js" defer></script></head>
+<body>
+<header><div><span class="eyebrow">YOUR CONVERSATION COMPANION</span><h1>Interview Assistant</h1></div><div class="session-info"><span id="connection" class="badge">Connecting…</span><strong id="duration">00:00</strong></div></header>
+<main>
+<section class="controls panel" aria-label="Session controls">
+<div class="device"><label for="mic">Your microphone</label><div class="select-row"><select id="mic" aria-label="Microphone device"></select><button id="test-mic" class="quiet">Test</button></div><meter id="level-me" min="0" max="1" value="0" aria-label="Microphone audio level"></meter><small id="status-me">Not capturing</small></div>
+<div class="device"><label for="system">Interviewer · system audio</label><div class="select-row"><select id="system" aria-label="System audio device"></select><button id="test-system" class="quiet">Test</button></div><meter id="level-interviewer" min="0" max="1" value="0" aria-label="System audio level"></meter><small id="status-interviewer">Select BlackHole; routing required</small></div>
+<div class="actions"><label for="length">Answer length</label><select id="length"><option value="short">Short · ~80 words</option><option value="medium">Medium · ~150 words</option><option value="long">Long · ~230 words</option></select><div class="select-row"><button id="start" class="primary">Start session</button><button id="stop" class="danger" disabled>Stop</button></div></div>
+</section>
+<div class="status-row"><span id="assembly">AssemblyAI: not connected</span><span id="groq">Groq: not checked</span><button id="refresh" class="text-button">Refresh devices</button></div>
+<p id="notice" role="status">Ready. No audio is captured until you start a session or test.</p><p id="error" role="alert" hidden></p>
+<div class="workspace"><section class="panel transcript-panel"><div class="section-top"><div><span class="eyebrow">LIVE CONVERSATION</span><h2>Transcript</h2></div><button id="clear" class="quiet">Clear transcript</button></div><div id="transcript" class="transcript"><p class="empty">Your conversation will appear here.<br>Interviewer and microphone speech stay separate.</p></div></section>
+<section class="panel answers-panel"><div class="section-top"><div><span class="eyebrow">A LITTLE HELP, WHEN YOU NEED IT</span><h2>Suggested answer</h2></div><button id="answer" class="quiet" disabled>Suggest answer</button></div><div id="answers" aria-live="polite"><p class="empty">Completed interviewer questions trigger a suggestion.<br>You can also request one manually.</p></div></section></div>
+<footer><span id="cost">Estimated AssemblyAI usage: $0.0000</span><span id="limit">Maximum session: 120 min</span><span>Cloud usage may consume credits or incur charges. Estimates exclude Groq and are not bills.</span></footer>
+</main>
+</body></html>
