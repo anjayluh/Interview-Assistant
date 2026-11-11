@@ -11,6 +11,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .config import Settings, ROOT
 from .audio import devices
 from .session import Session, safe_error
+from .profile import InterviewSetup, ProfileStore
+from .profile_api import LOCAL_ORIGINS, profile_routes
 
 class Controller:
     def __init__(self, settings):
@@ -49,6 +51,7 @@ class Controller:
     async def expire(self):
         await asyncio.sleep(self.settings.grace_seconds)
         await self.session.stop('Browser disconnected beyond the recovery period.')
+        self.session.clear()
         self.owner = None
 
     async def close(self):
@@ -61,10 +64,19 @@ class Controller:
         await self.session.answers.close()
 
 
-def create_app(settings=None):
+def create_app(settings=None, profile_store=None):
     settings = settings or Settings()
     control = Controller(settings)
     token = secrets.token_urlsafe(32)
+    store = profile_store or ProfileStore(ROOT / '.runtime/professional-profile.json')
+
+    def start_interview(data):
+        try:
+            setup = InterviewSetup.model_validate(data.get('interview', {}))
+        except ValueError:
+            raise ValueError('Check the interview context fields and their length limits.') from None
+        interview = store.interview(setup)
+        return control.session.start(int(data['mic']), int(data['system']), valid_length(data), interview)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -73,6 +85,7 @@ def create_app(settings=None):
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.control = control
+    app.include_router(profile_routes(store, token))
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', 'testserver'])
 
     @app.middleware('http')
@@ -109,7 +122,7 @@ def create_app(settings=None):
         origin = ws.headers.get('origin', '')
         client_id = ws.query_params.get('client', '')
         if (ws.cookies.get('ia_access') != token or origin not in
-            ('http://127.0.0.1:8765', 'http://localhost:8765', 'http://testserver') or
+            LOCAL_ORIGINS or
             not re.fullmatch(r'[a-zA-Z0-9-]{16,64}', client_id)):
             await ws.close(code=1008)
             return
@@ -134,7 +147,7 @@ def create_app(settings=None):
         async def receive_commands():
             while True:
                 message = await ws.receive_text()
-                if len(message) > 2048:
+                if len(message.encode('utf-8')) > 65536:
                     await ws.close(code=1009)
                     return
                 import json
@@ -144,7 +157,7 @@ def create_app(settings=None):
                     if cmd in ('start', 'test') and (control.operations or control.session.state != 'idle'):
                         raise ValueError('A session operation is already in progress. Stop it before starting another.')
                     if cmd == 'start':
-                        control.launch(control.session.start(int(data['mic']), int(data['system']), valid_length(data)))
+                        control.launch(start_interview(data))
                     elif cmd == 'stop':
                         await control.session.stop()
                     elif cmd == 'test':
@@ -203,9 +216,9 @@ def create_app(settings=None):
 
 
 def valid_length(data):
-    length = data.get('length', 'short')
+    length = data.get('length', 'medium')
     if length not in ('short', 'medium', 'long'):
-        raise ValueError('Choose short, medium or long answers.')
+        raise ValueError('Choose Brief, Standard or Detailed answers.')
     return length
 
 app = create_app()

@@ -52,6 +52,7 @@ def test_controller_recovery_and_expiry():
         with client.websocket_connect('/ws?client='+CLIENT,headers=ORIGIN) as ws:
             ws.receive_json()
             ws.send_json({'cmd':'start','mic':0,'system':1})
+            assert ws.receive_json()['type']=='clear'
             assert ws.receive_json()['state']=='starting'
             assert ws.receive_json()['state']=='running'
             with pytest.raises(WebSocketDisconnect):
@@ -84,6 +85,9 @@ def test_real_sdk_protocol_with_fake_network(monkeypatch):
         await t.connect()
         assert 'speech_model=universal-streaming-english' in connect.call_args.args[0]
         assert 'sample_rate=16000' in connect.call_args.args[0]
+        from urllib.parse import parse_qs, urlparse
+        query = parse_qs(urlparse(connect.call_args.args[0]).query)
+        assert 'Django' in json.loads(query['keyterms_prompt'][0])
         await t.send(b'\0'*1600)
         await asyncio.sleep(.02)
         assert b'\0'*1600 in sent

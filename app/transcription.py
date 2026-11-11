@@ -3,6 +3,15 @@ from assemblyai.streaming.v3 import (
     AsyncStreamingClient, StreamingClientOptions, StreamingParameters, StreamingEvents,
 )
 
+KEYTERMS_HOURLY_RATE = 0.04
+KEYTERMS = [
+    'Python', 'Django', 'Django REST Framework', 'DRF', 'Flask', 'PostgreSQL',
+    'Redis', 'React', 'React Native', 'TypeScript', 'JavaScript', 'Vue.js',
+    'Kubernetes', 'AWS', 'Docker', 'idempotency', 'microservices', 'GraphQL',
+    'REST API', 'CI/CD', 'KYC', 'fintech', 'webhooks',
+]
+
+
 class Transcriber:
     """One SDK connection per physical source; bounded SDK backlog guard.
 
@@ -19,6 +28,7 @@ class Transcriber:
         self.ready = asyncio.Event()
         self.failed = False
         self.closing = False
+        self.use_keyterms = True
         self.client.on(StreamingEvents.Begin, self._begin)
         self.client.on(StreamingEvents.Turn, self._turn)
         self.client.on(StreamingEvents.Error, self._error)
@@ -45,7 +55,7 @@ class Transcriber:
         await self.client.connect(StreamingParameters(
             sample_rate=16000, encoding='pcm_s16le', speech_model='universal-streaming-english',
             format_turns=True, min_turn_silence=500, max_turn_silence=1400,
-            inactivity_timeout=60, customer_support_audio_capture=False))
+            inactivity_timeout=60, customer_support_audio_capture=False, keyterms_prompt=KEYTERMS if self.use_keyterms else None))
         await asyncio.wait_for(self.ready.wait(), 12)
         if self.failed:
             raise RuntimeError('AssemblyAI could not start. Check credentials, account credits and connectivity.')

@@ -54,11 +54,24 @@ macOS may ask for microphone access for Terminal/Python (or the editor if launch
 
 ## Interface and behavior
 
-The left pane shows source-labelled live turns. Partial turns update in place; formatted final repeats do not request another answer. The right pane emphasizes suggested answers. Answer length can change during a session. **Suggest answer** uses the most recent completed interviewer speech if the automatic heuristic misses a question. It is disabled while an answer is being generated. There is no guarantee that every natural-language question is detected; use the manual control when needed.
+**Interview setup** lets you pick a CV, job title, company, description and notes before starting. The selected CV defaults to the version you saved as default. **Master profile only** uses the broader profile alone. Each interview snapshots these choices on Start. **Standard** is the default answer length, with Brief and Detailed also available.
 
-Clear transcript removes retained transcript and suggestions from this process, cancels the pending suggestion and clears the latest manual question. It does not stop transcription, reset usage, delete provider-side data or erase duplicate tracking for the active session. Session history is otherwise kept only in bounded memory; it disappears when the backend exits. No session history is written to disk.
+The transcript has separate interviewer and microphone panes. Interim text updates in place. Nearby segments from the same source are visually grouped where appropriate, while completed questions keep separate entries. The app retains the first completed provider text in memory and uses later provider formatting for display. **Suggest answer** handles a completed interviewer turn missed by the question detector.
 
-Answers use only the supplied skills: Python/Django/DRF/Flask, React/React Native/TypeScript, PostgreSQL/Redis, REST/GraphQL, Docker/AWS, fintech lending/KYC/payments, leadership and mentoring. The model is instructed not to invent achievements, metrics, employers or production AI experience. Review suggestions: generated technical answers can still be wrong.
+Each answer shows the spoken response, category and experience label. A personal example appears when it matches a fact supplied for that question. Code and technical detail are expandable. Groq classifies and answers in one request. The prompt asks it to distinguish verified work, working knowledge and proposed approaches, and to preserve contribution wording. Review its suggestions for accuracy.
+
+**Clear transcript** removes the current in-memory transcript and suggestions and cancels pending generation. Starting a new interview clears the previous one. A brief same-tab reconnect restores the current interview. If recovery expires, a new controller starts with an empty transcript. Audio and transcripts are never stored on disk.
+
+## Professional profile and CV versions
+
+Open **Professional profile & CVs** to edit the master profile. It is seeded with your verified employment, skills and outcomes. The displayed experience claim uses completed years from your verified career start month. Overlapping jobs stay in the employment history and do not add extra time.
+
+1. Select **New CV version** or an existing version.
+2. Choose a PDF or DOCX and click **Extract preview**. Review and correct the extracted text. Remove contact details and confirm that claims reflect your own contribution.
+3. Review the suggested differences against the master and prior CV, then click **Save CV version**. The comparison uses similar text and numbers to flag possible changes, so check dates and figures yourself.
+4. Rename, replace, delete or set the version as default from the same editor. Apply any verified changes to the master in its separate editor.
+
+The app parses files locally and keeps only the reviewed text. It supports text-based PDFs (up to 20 pages), DOCX files, 5 MiB per upload and 30 saved versions. Scanned PDFs need a text layer. The owner-only store is `.runtime/professional-profile.json` and is excluded from Git. Groq receives a few relevant reviewed excerpts and role context per question. AssemblyAI receives audio and, if enabled, a fixed list of engineering terms.
 
 ## Architecture and resource limits
 
@@ -73,13 +86,13 @@ One Uvicorn process/worker, no reload watcher, and no separate background daemon
 
 Streaming uses the official SDK's async client and one connection per source. Current SDKs also offer client-side mixed-channel attribution; this app deliberately keeps the separate connections you requested, avoiding ambiguity during overlapping speech. The pinned SDK has an unbounded internal writer queue; `app/transcription.py` is its sole producer and checks that queue before every send, refusing to enqueue a ninth frame. This explicitly guarded private SDK access is covered by a real-SDK/fake-network protocol test; keep the pinned version unless you rerun the checks.
 
-The transcript holds 120 completed turns, up to 5,000 characters each; at most 16 recent turns/14,000 characters plus the latest question reach Groq. The UI holds at most 122 transcript entries and 12 answers. Question tracking is bounded. UI event queues are capped at 128; a stalled UI is disconnected rather than accumulating updates. Level updates are throttled to roughly six per second per source. No transcript polling; only a local one-second duration display while running.
+The transcript holds 120 completed turns, up to 5,000 characters each; up to eight short recent transcript excerpts, two relevant prior suggestions and bounded career and role excerpts reach Groq. The UI holds at most 122 transcript entries and 12 answers. Question tracking is bounded. UI event queues are capped at 128; a stalled UI is disconnected rather than accumulating updates. Level updates are throttled to roughly six per second per source. No transcript polling; only a local one-second duration display while running.
 
 `sounddevice` supplies capture; NumPy and the small native `soxr` library provide safe stereo downmixing and stateful resampling from 44.1/48 kHz to 16 kHz. They perform signal conversion only, not AI inference. The resampler avoids audioop, which is unavailable in Python 3.13. `.venv` isolates all installed dependencies. `requirements.txt` lists direct runtime packages; `requirements-dev.txt` adds tests; `requirements.lock.txt` records the complete tested installation.
 
 ## Usage estimates and shutdown
 
-AssemblyAI is explicitly pinned to `universal-streaming-english`, with no premium diarization/add-ons. At the configured estimate of $0.15 per channel-hour, two channels are approximately **$0.30 per elapsed hour**, or **$0.60 over 120 minutes**, excluding Groq. The estimate counts connection setup and teardown conservatively. Actual provider billing, taxes, account plans and rate changes may differ. Check the [AssemblyAI pricing page](https://www.assemblyai.com/pricing) and update the rate in `.env` if needed.
+AssemblyAI uses `universal-streaming-english`. Engineering keyterms are enabled by default and can be switched off under **Interview setup**. At $0.15 base plus $0.04 for keyterms per channel-hour, two channels are approximately **$0.38 per elapsed hour**, or **$0.76 over 120 minutes**, excluding Groq. With keyterms switched off the estimate is **$0.60 over 120 minutes**. The estimate counts connection setup and teardown conservatively. Actual provider billing, taxes, account plans and rate changes may differ. Check the [AssemblyAI pricing page](https://www.assemblyai.com/pricing) and update the rate in `.env` if needed.
 
 Billing is based on session duration, including silence. Muting your microphone does not close its paid session. The UI estimate is not a bill, budget cap or account balance. The 120-minute default is a duration limit, not a guarantee against charges during network failure. Provider dashboards are authoritative.
 
@@ -127,8 +140,9 @@ cd "$HOME/Interview Assistant"
 .venv/bin/python -m pip check
 .venv/bin/python -m compileall -q app scripts tests
 .venv/bin/python -m pytest -q
-node --check app/static/app.js   # optional development check; Node is not required to run
+node --check app/static/app.js   # optional development check
+node --check app/static/profile.js
 .venv/bin/python scripts/measure.py
 ```
 
-Tests cover question detection, duplicate suppression, PCM conversion at 16/44.1/48 kHz, callback bounds, API model checking with mocks, SDK wire protocol with fake transport, turn handling, cleanup, startup failure, timeout, stop during startup, local test mode, WebSocket security/ownership/recovery and browser-disconnect expiry. A current Starlette/httpx deprecation warning affects its test adapter only; no extra package was added just to suppress it.
+Tests cover question detection, duplicate suppression, PCM conversion at 16/44.1/48 kHz, callback bounds, API model checking with mocks, SDK wire protocol with fake transport, turn handling, cleanup, startup failure, timeout, stop during startup, local test mode, WebSocket security/ownership/recovery browser-disconnect expiry, local PDF and DOCX preview, CV version management, experience calculation, role relevance, and interview isolation. Mocked model tests cover the structured response contract and representative interview questions. They do not measure live model accuracy. A current Starlette/httpx deprecation warning affects its test adapter only; no extra package was added just to suppress it.

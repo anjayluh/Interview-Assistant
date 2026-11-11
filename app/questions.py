@@ -12,7 +12,7 @@ def is_question(text):
     if '?' in text:
         return True
     return bool(re.match(r'(?:(?:so|and|okay|right|now) )?(what|why|how|when|where|which|who)\b', words) or
-                re.match(r'(tell me|walk me|describe|explain|compare|design|implement|discuss|give (me |us )?an example|can you|could you|would you|have you|do you|did you)\b', words))
+                re.match(r'(tell me|walk me|describe|explain|compare|design|implement|write|debug|optimise|optimize|discuss|give (me |us )?an example|can you|could you|would you|have you|do you|did you)\b', words))
 
 class QuestionGate:
     def __init__(self):

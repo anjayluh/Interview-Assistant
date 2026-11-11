@@ -2,6 +2,7 @@
 const $ = id => document.getElementById(id);
 let socket, retry = 0, timer, elapsed = 0, usage = 0, rate = .15, running = false, connected = false;
 let currentState = 'idle';
+let interviewRan = false;
 const client = sessionStorage.iaClient || (sessionStorage.iaClient = crypto.randomUUID());
 const rows = new Map();
 function error(message) { $('error').textContent = message; $('error').hidden = false; }
@@ -19,6 +20,7 @@ function buttons() {
   $('answer').disabled = !connected || currentState !== 'running';
   $('mic').disabled = $('system').disabled = !idle;
   $('refresh').disabled = !idle;
+  for (const id of ['interview-cv','job-title','job-company','job-description','job-notes','keyterms']) $(id).disabled = !idle;
 }
 function clock() {
   $('duration').textContent = `${Math.floor(elapsed / 60).toString().padStart(2,'0')}:${Math.floor(elapsed % 60).toString().padStart(2,'0')}`;
@@ -26,6 +28,11 @@ function clock() {
 }
 function state(s) {
   currentState = s.state; running = s.state === 'running'; elapsed = s.duration; usage = s.channel_seconds;
+  if (running) interviewRan = true;
+  if (currentState === 'idle' && interviewRan) {
+    interviewRan = false;
+    document.dispatchEvent(new Event('interview-ended'));
+  }
   rate = usage > 0 ? s.estimate * 3600 / usage : .15;
   clearInterval(timer);
   if (running) timer = setInterval(() => { elapsed++; usage += s.active_channels; clock(); }, 1000);
@@ -41,30 +48,57 @@ function state(s) {
   buttons(); clock();
 }
 function transcript(x) {
-  if (!rows.size) $('transcript').replaceChildren();
+  const source = $(`transcript-${x.role}`);
   let row = rows.get(x.key);
   if (!row) {
-    row = document.createElement('div');
-    const speaker = document.createElement('span'); speaker.className = 'speaker';
-    speaker.textContent = x.role === 'me' ? 'You · microphone' : 'Interviewer · system audio';
-    row.append(speaker, document.createElement('p'));
-    rows.set(x.key, row); $('transcript').append(row);
+    row = document.createElement('p');
+    rows.set(x.key, row);
+    source.append(row);
   }
-  row.className = `utterance ${x.role} ${x.final ? '' : 'partial'}`;
-  row.lastChild.textContent = x.text;
+  row.className = `utterance ${x.role} ${x.final ? '' : 'partial'} ${x.continuation ? 'continuation' : ''}`;
+  row.textContent = x.text;
   while (rows.size > 122) { const key = rows.keys().next().value; rows.get(key).remove(); rows.delete(key); }
-  $('transcript').scrollTop = $('transcript').scrollHeight;
+  source.scrollTop = source.scrollHeight;
 }
 function answer(x) {
   $('answers').querySelector('.empty')?.remove();
   const card = document.createElement('article'); card.className = 'answer-card';
   const q = document.createElement('p'); q.className = 'question'; q.textContent = x.question;
   const p = document.createElement('p'); p.className = 'response'; p.textContent = x.text;
-  card.append(q,p); $('answers').prepend(card);
+  const meta = document.createElement('p');
+  meta.className = 'answer-meta';
+  meta.textContent = [x.category, x.experience === 'Not applicable' ? '' : x.experience].filter(Boolean).join(' · ');
+  card.append(q, meta, p);
+  if (x.example) {
+    const example = document.createElement('p');
+    example.className = 'answer-example';
+    example.textContent = 'Personal example — ' + x.example;
+    card.append(example);
+  }
+  if (x.code || x.details) {
+    const more = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = x.code ? ['Code', x.language].filter(Boolean).join(' · ') : 'Technical detail';
+    more.append(summary);
+    if (x.code) {
+      const block = document.createElement('pre');
+      const code = document.createElement('code');
+      code.textContent = x.code;
+      block.append(code);
+      more.append(block);
+    }
+    if (x.details) {
+      const detail = document.createElement('p');
+      detail.textContent = x.details;
+      more.append(detail);
+    }
+    card.append(more);
+  }
+  $('answers').prepend(card);
   while ($('answers').children.length > 12) $('answers').lastChild.remove();
   $('answers').scrollTop = 0;
 }
-function clear() { rows.clear(); $('transcript').replaceChildren(); $('answers').replaceChildren(); }
+function clear() { rows.clear(); $('transcript-interviewer').replaceChildren(); $('transcript-me').replaceChildren(); $('answers').replaceChildren(); }
 function connect() {
   socket = new WebSocket(`ws://${location.host}/ws?client=${encodeURIComponent(client)}`);
   socket.onopen = () => { retry = 0; connected = true; $('connection').textContent = 'Connected locally'; buttons(); };
@@ -96,15 +130,18 @@ async function refresh() {
       for (const d of data.devices || []) select.add(new Option(`${d.name} · ${d.channels}ch`, String(d.id)));
       if (previous && [...select.options].some(o => o.value === previous)) select.value = previous;
     }
-    const blackhole = data.devices?.find(d => /blackhole/i.test(d.name));
+    const blackhole = data.devices?.find(d => /blackhole|ideashare/i.test(d.name));
     if (blackhole && !$('system').value) $('system').value = String(blackhole.id);
-    const mic = data.devices?.find(d => !/blackhole|teams|parrot/i.test(d.name));
+    const mic = data.devices?.find(d => !/blackhole|ideashare|teams|parrot/i.test(d.name));
     if (mic && !$('mic').value) $('mic').value = String(mic.id);
     if (data.error) error(data.error);
     buttons();
   } catch { error('Unable to list devices. Check the backend and reload.'); }
 }
-$('start').onclick = () => { command({cmd:'start', mic:Number($('mic').value), system:Number($('system').value), length:$('length').value}); $('start').disabled = true; };
+$('start').onclick = () => { command({cmd:'start', mic:Number($('mic').value), system:Number($('system').value), length:$('length').value, interview:{
+  cv_id:$('interview-cv').dataset.loaded ? $('interview-cv').value : null, title:$('job-title').value, company:$('job-company').value,
+  description:$('job-description').value, notes:$('job-notes').value, keyterms:$('keyterms').checked
+}}); $('start').disabled = true; };
 $('stop').onclick = () => command({cmd:'stop'});
 $('test-mic').onclick = () => command({cmd:'test',role:'me',device:Number($('mic').value)});
 $('test-system').onclick = () => command({cmd:'test',role:'interviewer',device:Number($('system').value)});

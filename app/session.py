@@ -1,10 +1,12 @@
 import asyncio
+import json
 import time
 from collections import deque
 from .audio import Capture
 from .answers import Answers
 from .questions import QuestionGate, is_question
-from .transcription import Transcriber
+from .profile import InterviewContext, terms
+from .transcription import KEYTERMS_HOURLY_RATE, Transcriber
 
 class Session:
     def __init__(self, settings, emit, capture_factory=Capture, transcriber_factory=Transcriber, answers=None):
@@ -27,12 +29,15 @@ class Session:
         self.elapsed = 0
         self.channel_seconds = 0
         self.opened_at = {}
-        self.length = 'short'
+        self.length = 'medium'
+        self.interview = None
+        self.usage_rate = settings.hourly_rate
         self.reason = 'Ready. Streaming starts only when you press Start.'
         self.latest = ''
         self.testing = False
         self.generation = 0
-        self.pending_question = None
+        self.last_final_at = 0
+        self.pending_questions = deque(maxlen=6)
 
     async def open_capture(self, cap):
         task = asyncio.create_task(asyncio.to_thread(cap.open))
@@ -48,13 +53,13 @@ class Session:
         usage = self.channel_seconds + sum(now - t for t in self.opened_at.values())
         return {'type': 'state', 'state': self.state, 'reason': self.reason,
                 'duration': duration, 'channel_seconds': usage,
-                'estimate': usage / 3600 * self.settings.hourly_rate,
+                'estimate': usage / 3600 * self.usage_rate,
                 'active_channels': len(self.opened_at), 'testing': self.testing, 'sources': list(self.captures),
                 'model': self.settings.model, 'max_minutes': self.settings.max_minutes,
                 'configured': {'assemblyai': bool(self.settings.assembly_key), 'groq': bool(self.settings.groq_key)},
                 'groq_verified': self.answers.verified, 'length': self.length}
 
-    async def start(self, mic, system, length):
+    async def start(self, mic, system, length, interview=None):
         async with self.lock:
             if self.state != 'idle':
                 raise ValueError('Stop the current session or audio test first.')
@@ -66,7 +71,8 @@ class Session:
                 raise ValueError('MAX_SESSION_MINUTES must be between 0 and 1440.')
             self.length = length
             self.generation += 1
-            self.latest = ''
+            self.clear()
+            self.interview = interview or InterviewContext()
             self.start_task = asyncio.current_task()
             self.state = 'starting'
             self.reason = 'Checking Groq model and opening audio sources…'
@@ -82,6 +88,8 @@ class Session:
                     cap.overflow = False
                     while not cap.queue.empty():
                         cap.queue.get_nowait()
+                use_keyterms = self.interview.setup.keyterms
+                self.usage_rate = self.settings.hourly_rate + (KEYTERMS_HOURLY_RATE if use_keyterms else 0)
                 self.started = time.monotonic()
                 self.elapsed = self.channel_seconds = 0
                 self.gate = QuestionGate()
@@ -89,6 +97,7 @@ class Session:
                 for role in ('me', 'interviewer'):
                     trans = self.transcriber_factory(self.settings.assembly_key,
                         lambda event, r=role: self.turn(r, event), self.fatal)
+                    trans.use_keyterms = use_keyterms
                     self.transcribers[role] = trans
                     # Count connection setup conservatively in estimate.
                     self.opened_at[role] = time.monotonic()
@@ -144,16 +153,28 @@ class Session:
             return
         key = f'{self.generation}:{role}:{event.turn_order}'
         final = bool(event.end_of_turn)
-        self.emit({'type': 'transcript', 'key': key, 'role': role, 'text': text, 'final': final})
+        if not final and key in self.final_keys:
+            return
+        previous = self.history[-1] if self.history else {}
+        repeated = next((entry for entry in reversed(self.history) if entry['key'] == key), None) if key in self.final_keys else None
+        continuation = repeated['continuation'] if repeated else (
+            previous.get('role') == role and time.monotonic() - self.last_final_at < 3
+            and (role == 'me' or not (is_question(text) or is_question(previous['text'])))
+        )
+        entry = {'key': key, 'role': role, 'text': text, 'final': final, 'continuation': continuation}
+        self.emit({'type': 'transcript', **entry})
         if not final:
-            self.partials[role] = {'key': key, 'role': role, 'text': text, 'final': False}
+            self.partials[role] = entry
             return
         self.partials.pop(role, None)
         # Formatted final events repeat a turn: update UI, never trigger another answer.
         if key in self.final_keys:
+            if repeated:
+                repeated['text'] = text
             return
         self.final_keys.append(key)
-        self.history.append({'key': key, 'role': role, 'text': text, 'final': True})
+        self.last_final_at = time.monotonic()
+        self.history.append({**entry, 'original_text': text})
         if role == 'interviewer':
             self.latest = text
             if is_question(text) and self.gate.claim(key, text):
@@ -163,21 +184,30 @@ class Session:
         question = question or self.latest
         if not question:
             raise ValueError('No completed interviewer speech yet.')
-        # Coalesce pending questions; retain only the latest, no request backlog.
-        self.pending_question = question
+        # Keep a short queue so distinct questions survive a slow generation.
+        self.pending_questions.append(question)
         if not self.answer_task or self.answer_task.done():
             self.answer_task = asyncio.create_task(self.answer_loop())
 
     async def answer_loop(self):
-        while self.pending_question:
-            question = self.pending_question
-            self.pending_question = None
-            context = '\n'.join(f"{x['role']}: {x['text']}" for x in list(self.history)[-16:])[-14000:]
-            context += '\nLatest interviewer question to answer: ' + question
+        while self.pending_questions:
+            question = self.pending_questions.popleft()
+            recent = list(self.history)[-8:]
+            question_terms = terms(question)
+            previous = [item for item in self.suggestions
+                        if len(question_terms & terms(item['question'])) >= 2
+                        and item['question'] != question][-2:]
+            context = json.dumps({
+                'question': question[:2000],
+                'conversation': [{'speaker': x['role'], 'text': x['text'][:250]} for x in recent],
+                'relevant_prior_suggestions': [{'question': x['question'][:250], 'text': x['text'][:450]}
+                                               for x in previous],
+                'professional_context': json.loads((self.interview or InterviewContext()).for_question(question)),
+            }, ensure_ascii=False)
             self.emit({'type': 'groq', 'status': 'generating'})
             try:
-                text = await self.answers.generate(context, self.length)
-                item = {'type': 'answer', 'question': question, 'text': text}
+                suggestion = await self.answers.generate(context, self.length)
+                item = {'type': 'answer', 'question': question, **suggestion}
                 self.suggestions.append(item)
                 self.emit(item)
                 self.emit({'type': 'groq', 'status': 'ready'})
@@ -251,7 +281,8 @@ class Session:
         self.captures.clear()
         self.tasks.clear()
         self.partials.clear()
-        self.pending_question = None
+        self.pending_questions.clear()
+        self.interview = None
         self.testing = False
         self.state = 'idle'
         if any(isinstance(x, BaseException) for x in results):
@@ -261,7 +292,7 @@ class Session:
     def clear(self):
         if self.answer_task and not self.answer_task.done():
             self.answer_task.cancel()
-        self.pending_question = None
+        self.pending_questions.clear()
         self.history.clear()
         self.suggestions.clear()
         self.partials.clear()

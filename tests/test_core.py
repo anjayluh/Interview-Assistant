@@ -1,4 +1,5 @@
 import asyncio
+import json
 import queue
 import time
 from types import SimpleNamespace as NS
@@ -81,7 +82,7 @@ class FakeAnswers:
     async def generate(self, context, length):
         self.calls.append((context,length))
         await asyncio.sleep(.01)
-        return 'I would use an idempotency key.'
+        return {'text': 'I would use an idempotency key.'}
     async def close(self): pass
 
 def make_session(max_minutes=120):
@@ -188,12 +189,17 @@ def test_groq_model_validation_and_request():
     async def check():
         settings=Settings(groq_key='fake',model='test-model')
         client=NS(models=NS(list=AsyncMock(return_value=NS(data=[NS(id='test-model')]))),
-                  chat=NS(completions=NS(create=AsyncMock(return_value=NS(choices=[NS(message=NS(content='Answer'))])))),
+                  chat=NS(completions=NS(create=AsyncMock(return_value=NS(choices=[NS(message=NS(content=json.dumps({
+                      'text':'Answer', 'category':'Technical concept', 'experience':'Proposed approach',
+                      'example':'', 'code':'', 'language':'', 'details':'',
+                  })))])))),
                   close=AsyncMock())
         service=Answers(settings,client)
-        assert await service.generate('interviewer: Explain caching','short')=='Answer'
+        from app.profile import InterviewContext
+        context = json.dumps({'professional_context': json.loads(InterviewContext().for_question('Explain caching'))})
+        assert (await service.generate(context,'short'))['text']=='Answer'
         args=client.chat.completions.create.call_args.kwargs
-        assert args['model']=='test-model' and args['max_completion_tokens']==450
+        assert args['model']=='test-model' and args['max_completion_tokens']==900
         assert 'Do not invent' in args['messages'][0]['content']
         settings.model='missing'
         with pytest.raises(ValueError): await service.verify()
