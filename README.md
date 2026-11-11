@@ -4,14 +4,11 @@ A local, compact interview companion for an Apple Silicon Mac with 8 GB RAM. It 
 
 ## Quick start
 
-1. Open `~/Interview Assistant/.env` in a text editor. Hidden files can be shown in Finder with Command–Shift–period. Add your own AssemblyAI and Groq API keys. Do not paste them into chat or JavaScript.
-2. Leave `GROQ_MODEL=openai/gpt-oss-20b`, or explicitly select another accessible model. The backend checks the account's model list before opening transcription. It never silently substitutes models.
-3. Double-click `~/Desktop/Start Interview Assistant.command`. Keep its Terminal open. Brave opens at http://127.0.0.1:8765.
-4. Complete the audio routing below, select the two input devices, and use their independent **Test** buttons. Tests are local, last ten seconds, and make no cloud calls.
-5. Press **Start session** when ready. Merely opening the application never starts capture or paid streaming.
-6. **Stop** closes the audio/transcription session but leaves the app open. The Desktop **Stop Interview Assistant.command** exits the backend. Control-C in its Terminal also shuts it down cleanly. Use the stop launcher before editing keys; restart to reload `.env`.
-
-The environment and dependencies are already installed on this Mac. No API keys have been supplied and no real cloud/audio integration has been validated. See SETUP-REMAINING.md and VERIFICATION.md.
+1. Double-click `~/Desktop/Start Interview Assistant.command`. Brave opens at http://127.0.0.1:8765 in **LOCAL-ONLY** mode.
+2. Manage CVs, edit the professional profile and prepare an interview. These operations require no keys and make no provider requests.
+3. For audio routing, select the microphone and system input and run their separate **Test** buttons. Each ten-second test stays on your Mac.
+4. Leave the cap at **UGX 0** if you have no budget. Review **Live session safety** only if you intend to authorise paid services.
+5. **STOP ALL** ends the active capture and live requests, clears the temporary interview data and returns to local-only mode. The Desktop **Stop Interview Assistant.command** exits the backend. Restart the backend after editing `.env`.
 
 ## API configuration
 
@@ -24,13 +21,11 @@ ASSEMBLYAI_API_KEY=
 GROQ_API_KEY=
 GROQ_MODEL=openai/gpt-oss-20b
 MAX_SESSION_MINUTES=120
-ASSEMBLYAI_HOURLY_RATE=0.15
-BROWSER_GRACE_SECONDS=15
 ```
 
 `.env` is excluded from Git and created with owner-only read/write permissions (0600). Browser code receives only configured/not-configured flags. SDK errors are replaced with safe messages. Never enable HTTP/SDK debug logs when using real keys. The backend remains loopback-only and rejects other origins/hosts. It uses an HttpOnly, SameSite cookie for browser control and a separate local stop token. One tab owns a session at a time.
 
-Groq's current production list shows `openai/gpt-oss-20b` at $0.075 input and $0.30 output per million tokens. It is the inexpensive default verified against the documentation during development, but account availability is checked at runtime. Output uses low reasoning effort for this model and bounded completion tokens. No web search/tools are enabled. See [Groq model documentation](https://console.groq.com/docs/models).
+The app checks whether your Groq account can use the selected model only after live-session authorisation. Groq charges and allowances are separate from the transcription estimate. Check [Groq's model and pricing information](https://console.groq.com/docs/models) and your own dashboard.
 
 ## Audio routing — actions you perform
 
@@ -60,7 +55,7 @@ The transcript has separate interviewer and microphone panes. Interim text updat
 
 Each answer shows the spoken response, category and experience label. A personal example appears when it matches a fact supplied for that question. Code and technical detail are expandable. Groq classifies and answers in one request. The prompt asks it to distinguish verified work, working knowledge and proposed approaches, and to preserve contribution wording. Review its suggestions for accuracy.
 
-**Clear transcript** removes the current in-memory transcript and suggestions and cancels pending generation. Starting a new interview clears the previous one. A brief same-tab reconnect restores the current interview. If recovery expires, a new controller starts with an empty transcript. Audio and transcripts are never stored on disk.
+**Clear transcript** removes the current in-memory transcript and suggestions and cancels pending generation. Stopping a session or losing the browser connection clears temporary interview data. Audio and transcripts are never stored on disk.
 
 ## Professional profile and CV versions
 
@@ -90,13 +85,21 @@ The transcript holds 120 completed turns, up to 5,000 characters each; up to eig
 
 `sounddevice` supplies capture; NumPy and the small native `soxr` library provide safe stereo downmixing and stateful resampling from 44.1/48 kHz to 16 kHz. They perform signal conversion only, not AI inference. The resampler avoids audioop, which is unavailable in Python 3.13. `.venv` isolates all installed dependencies. `requirements.txt` lists direct runtime packages; `requirements-dev.txt` adds tests; `requirements.lock.txt` records the complete tested installation.
 
-## Usage estimates and shutdown
+## Live session safety
 
-AssemblyAI uses `universal-streaming-english`. Engineering keyterms are enabled by default and can be switched off under **Interview setup**. At $0.15 base plus $0.04 for keyterms per channel-hour, two channels are approximately **$0.38 per elapsed hour**, or **$0.76 over 120 minutes**, excluding Groq. With keyterms switched off the estimate is **$0.60 over 120 minutes**. The estimate counts connection setup and teardown conservatively. Actual provider billing, taxes, account plans and rate changes may differ. Check the [AssemblyAI pricing page](https://www.assemblyai.com/pricing) and update the rate in `.env` if needed.
+The app starts in **LOCAL-ONLY** mode. Opening a page, using the CV and profile tools, preparing an interview, calculating an estimate, and testing audio make no requests to AssemblyAI or Groq.
 
-Billing is based on session duration, including silence. Muting your microphone does not close its paid session. The UI estimate is not a bill, budget cap or account balance. The 120-minute default is a duration limit, not a guarantee against charges during network failure. Provider dashboards are authoritative.
+To authorise one live session, select two distinct audio inputs, choose a duration, and enter a maximum transcription estimate in UGX. The duration defaults to **5 minutes**. `MAX_SESSION_MINUTES` is the optional server-side ceiling (120 minutes by default). The app starts its deadline before the first provider call, including connection setup.
 
-Both connections are terminated on Stop, timeout, fatal audio/transcription failure, graceful process shutdown or a controlling-browser disconnection lasting more than 15 seconds. The browser reconnects with short exponential backoff during that grace period and recovers the bounded snapshot. Initial AssemblyAI network connection has one bounded retry; established cloud sessions are not silently restarted after failure. Press Start yourself after fixing the problem. Groq errors can be retried with Suggest answer and do not repeatedly submit automatically. No app can send termination during a power failure or lost network; check provider usage after such an event.
+The quote uses AssemblyAI's published Universal-Streaming English rate of **US$0.15 per audio channel-hour**, checked **11 November 2026**. Optional keyterms are off by default and add **US$0.04 per channel-hour** when enabled. Multiply the per-channel rate by two streams and the session minutes divided by 60. Five minutes costs an estimated **US$0.025** at the base rate or about **US$0.0317** with keyterms. The UGX estimate uses the exchange rate you enter and rounds up to a whole shilling. The estimate assumes both streams run for the entire selected duration and excludes Groq, taxes, conversion fees and any billing after disconnect. [AssemblyAI pricing](https://www.assemblyai.com/pricing)
+
+Enter a checked UGX-per-USD rate with its source and date. Exchange rates older than seven days, future dates and missing conversion information block live sessions. The published pricing snapshot expires after 30 days and must be refreshed from the provider in `app/cost.py` before the app allows new sessions. If an estimate cannot be calculated, the app displays **COST UNKNOWN — LIVE SESSION BLOCKED**. The default **UGX 0** cap blocks all non-zero estimates, even when credits may be available.
+
+Check billing status, any free allowance and remaining credits in **both** provider dashboards, then confirm those checks in the app. The app does not verify account billing and does not assume free access. The app also requires configured API keys, a fresh single-use quote within your limit, and a separate confirmation for the specific live session. The server checks the same inputs again before calling either provider.
+
+**STOP ALL**, the backend deadline, provider failure, browser disconnection, missing browser heartbeats for 15 seconds, and graceful backend shutdown cancel pending answer requests and stop both audio sources and AssemblyAI connections. The app clears session-only data and returns to local-only mode. AssemblyAI handshakes and Groq requests have zero automatic retries. Reconnecting the browser restores the local interface without resuming a provider session.
+
+The cap is an estimate used for admission. The app cannot enforce provider billing, guarantee cancellation of a request already received by Groq, or guarantee that a broken network lets the provider receive termination. Account dashboards and provider-side limits are authoritative.
 
 ## Installation/recovery
 
@@ -124,7 +127,7 @@ The launcher activates the virtual environment, locks out duplicate backend star
 - **Groq model unavailable:** choose an explicitly accessible model in `.env` and restart. No fallback is automatic. Models/list verifies access but does not establish that text generation works; a real answer is the final integration test.
 - **API error:** check keys locally, account credits, network and model access. Error details are intentionally sanitized to avoid leaking secrets. Check the providers' dashboards. Never send key values in screenshots or chat.
 - **Port 8765 occupied:** the launcher reports an error. Stop a previous assistant using its own Stop launcher/Terminal. Do not terminate an unrelated app; resolve that port conflict yourself.
-- **Another tab controls session:** return to that tab, or close it and wait at least 15 seconds. Only one tab controls audio; reconnecting the same tab preserves ownership during the grace period.
+- **Another tab controls session:** return to that tab or close it. Closing the controlling tab ends any live session before the backend releases control.
 - **macOS blocks `.command`:** inspect the local text launcher and launch from Terminal if needed. The assistant does not approve security dialogs on your behalf.
 
 ## VS Code optimizations
@@ -145,4 +148,4 @@ node --check app/static/profile.js
 .venv/bin/python scripts/measure.py
 ```
 
-Tests cover question detection, duplicate suppression, PCM conversion at 16/44.1/48 kHz, callback bounds, API model checking with mocks, SDK wire protocol with fake transport, turn handling, cleanup, startup failure, timeout, stop during startup, local test mode, WebSocket security/ownership/recovery browser-disconnect expiry, local PDF and DOCX preview, CV version management, experience calculation, role relevance, and interview isolation. Mocked model tests cover the structured response contract and representative interview questions. They do not measure live model accuracy. A current Starlette/httpx deprecation warning affects its test adapter only; no extra package was added just to suppress it.
+Tests cover question detection, duplicate suppression, PCM conversion at 16/44.1/48 kHz, callback bounds, API model checking with mocks, SDK wire protocol with fake transport, turn handling, cleanup, startup failure, timeout, stop during startup, local test mode, WebSocket security/ownership/recovery browser-disconnect and heartbeat cleanup, local PDF and DOCX preview, CV version management, experience calculation, role relevance, interview isolation, the offline price and billing gates, single-use authorisation, and the five-minute backend deadline. Mocked model tests cover the structured response contract and representative interview questions. They do not measure live model accuracy. A current Starlette/httpx deprecation warning affects its test adapter only; no extra package was added just to suppress it.

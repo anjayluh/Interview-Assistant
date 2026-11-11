@@ -83,15 +83,18 @@ class Capture:
 
     def close(self):
         self.closed = True
-        if self.stream:
-            try:
-                self.stream.stop()
-            finally:
-                self.stream.close()
-                self.stream = None
-        self.pending.clear()
-        while not self.queue.empty():
-            try:
-                self.queue.get_nowait()
-            except queue.Empty:
-                break
+        try:
+            if self.stream:
+                try:
+                    self.stream.abort()
+                finally:
+                    self.stream.close()
+        finally:
+            self.stream = None
+            self.pending.clear()
+            self.resampler = None
+            while not self.queue.empty():
+                try:
+                    self.queue.get_nowait()
+                except queue.Empty:
+                    break

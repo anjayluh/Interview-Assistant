@@ -82,7 +82,7 @@ def main():
     opener = threading.Thread(target=open_when_ready, daemon=True)
     opener.start()
     print('Interview Assistant: ' + URL)
-    print('Keep this Terminal open. Use Stop in the app to end paid streaming; Control-C or the Stop launcher exits the backend.')
+    print('Keep this Terminal open. Use STOP ALL in the app to end live streaming; Control-C or the Stop launcher exits the backend.')
     print('No audio or paid session starts automatically.')
     try:
         server.run()

@@ -3,7 +3,6 @@ from assemblyai.streaming.v3 import (
     AsyncStreamingClient, StreamingClientOptions, StreamingParameters, StreamingEvents,
 )
 
-KEYTERMS_HOURLY_RATE = 0.04
 KEYTERMS = [
     'Python', 'Django', 'Django REST Framework', 'DRF', 'Flask', 'PostgreSQL',
     'Redis', 'React', 'React Native', 'TypeScript', 'JavaScript', 'Vue.js',
@@ -21,14 +20,13 @@ class Transcriber:
     """
     def __init__(self, key, on_turn, on_error, client=None):
         self.client = client or AsyncStreamingClient(StreamingClientOptions(
-            api_key=key, connect_timeout=8, max_connection_retries=1,
-            connection_retry_delay=1, terminate_timeout=1))
+            api_key=key, connect_timeout=8, max_connection_retries=0, terminate_timeout=1))
         self.on_turn = on_turn
         self.on_error = on_error
         self.ready = asyncio.Event()
         self.failed = False
         self.closing = False
-        self.use_keyterms = True
+        self.use_keyterms = False
         self.client.on(StreamingEvents.Begin, self._begin)
         self.client.on(StreamingEvents.Turn, self._turn)
         self.client.on(StreamingEvents.Error, self._error)

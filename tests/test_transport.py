@@ -8,6 +8,7 @@ from app.config import Settings
 from app.main import create_app
 from app.transcription import Transcriber
 from tests.test_core import FakeCapture, FakeTranscriber, FakeAnswers
+from tests.live_helpers import start_command
 
 ORIGIN={'origin':'http://testserver'}
 CLIENT='client-1234567890123456'
@@ -42,27 +43,32 @@ def test_reject_cross_origin():
             with client.websocket_connect('/ws?client='+CLIENT,headers={'origin':'http://evil.example'}): pass
         assert client.get('/health',headers={'host':'evil.example'}).status_code==400
 
-def test_controller_recovery_and_expiry():
+def test_controller_disconnect_stops_both_streams():
     import time
-    app=create_app(Settings(assembly_key='fake',groq_key='fake',grace_seconds=.06))
+    app=create_app(Settings(assembly_key='fake',groq_key='fake'))
     session=app.state.control.session
     session.capture_factory=FakeCapture; session.transcriber_factory=FakeTranscriber; session.answers=FakeAnswers()
     with TestClient(app) as client:
         client.get('/')
         with client.websocket_connect('/ws?client='+CLIENT,headers=ORIGIN) as ws:
             ws.receive_json()
-            ws.send_json({'cmd':'start','mic':0,'system':1})
+            ws.send_json(start_command(client))
             assert ws.receive_json()['type']=='clear'
             assert ws.receive_json()['state']=='starting'
             assert ws.receive_json()['state']=='running'
+            captures = list(session.captures.values())
+            streams = list(session.transcribers.values())
             with pytest.raises(WebSocketDisconnect):
                 with client.websocket_connect('/ws?client=another-client-123456',headers=ORIGIN): pass
-        # Immediate recovery preserves the paid session.
+        deadline = time.monotonic() + 1
+        while session.state != 'idle' and time.monotonic() < deadline:
+            time.sleep(.01)
         with client.websocket_connect('/ws?client='+CLIENT,headers=ORIGIN) as ws:
-            assert ws.receive_json()['state']['state']=='running'
-        time.sleep(.13)
-        assert session.state=='idle'
-        assert not session.transcribers
+            snapshot = ws.receive_json()
+            assert snapshot['state']['state']=='idle'
+            assert not snapshot['history']
+        assert all(x.closed for x in captures + streams)
+
 
 def test_real_sdk_protocol_with_fake_network(monkeypatch):
     from assemblyai.streaming.v3 import AsyncStreamingClient
@@ -82,6 +88,7 @@ def test_real_sdk_protocol_with_fake_network(monkeypatch):
         monkeypatch.setattr(module,'websocket_connect_async',connect)
         errors=[]
         t=Transcriber('fake',lambda e:None,errors.append)
+        t.use_keyterms = True
         await t.connect()
         assert 'speech_model=universal-streaming-english' in connect.call_args.args[0]
         assert 'sample_rate=16000' in connect.call_args.args[0]

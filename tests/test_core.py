@@ -1,4 +1,5 @@
 import asyncio
+from tests.live_helpers import live_options
 import json
 import queue
 import time
@@ -83,7 +84,7 @@ class FakeAnswers:
         self.calls.append((context,length))
         await asyncio.sleep(.01)
         return {'text': 'I would use an idempotency key.'}
-    async def close(self): pass
+    async def close(self): self.verified=False
 
 def make_session(max_minutes=120):
     events=[]; answers=FakeAnswers()
@@ -93,7 +94,7 @@ def make_session(max_minutes=120):
 def test_turns_only_final_interviewer_and_cleanup():
     async def check():
         session, events, answers = make_session()
-        await session.start(0,1,'short')
+        await session.start(0,1,'short', options=live_options())
         captures=list(session.captures.values()); trans=list(session.transcribers.values())
         event=NS(transcript='How do you implement payments?',turn_order=1,end_of_turn=False)
         session.turn('interviewer',event)
@@ -110,7 +111,7 @@ def test_turns_only_final_interviewer_and_cleanup():
         assert all(c.closed for c in captures) and all(t.closed for t in trans)
         assert session.state=='idle' and not session.tasks and not session.opened_at
         assert session.channel_seconds>0
-        await session.start(0,1,'medium')
+        await session.start(0,1,'medium', options=live_options())
         session.turn('interviewer',event)
         await asyncio.sleep(.03)
         assert len(answers.calls)==2  # reused SDK turn ID belongs to new session
@@ -119,11 +120,11 @@ def test_turns_only_final_interviewer_and_cleanup():
 
 def test_timeout_and_fatal():
     async def check():
-        session,_,_=make_session(.0005)
-        await session.start(0,1,'short')
-        await asyncio.sleep(.08)
+        session,_,_=make_session()
+        await session.start(0,1,'short', options=live_options())
+        await session.watchdog(asyncio.get_running_loop().time())
         assert session.state=='idle' and 'Maximum' in session.reason
-        await session.start(0,1,'short')
+        await session.start(0,1,'short', options=live_options())
         session.fatal('Network dropped')
         await asyncio.sleep(.02)
         assert session.state=='idle' and session.reason=='Network dropped'
@@ -138,7 +139,7 @@ def test_failed_second_connection_cleans_both():
                 made.append(self)
                 if len(made)==2: raise RuntimeError('failure')
         session.transcriber_factory=Failing
-        with pytest.raises(RuntimeError): await session.start(0,1,'short')
+        with pytest.raises(RuntimeError): await session.start(0,1,'short', options=live_options())
         assert len(made)==2 and all(t.closed for t in made)
         assert session.state=='idle' and not session.captures
     asyncio.run(check())
@@ -148,7 +149,7 @@ def test_stop_during_start():
         session,_,_=make_session()
         async def slow_verify(): await asyncio.sleep(20)
         session.answers.verify=slow_verify
-        task=asyncio.create_task(session.start(0,1,'short'))
+        task=asyncio.create_task(session.start(0,1,'short', options=live_options()))
         await asyncio.sleep(.01)
         await asyncio.wait_for(session.stop(), .5)
         assert task.cancelled() and session.state=='idle'
@@ -225,7 +226,7 @@ def test_cancel_open_waits_before_hardware_cleanup():
                 assert self.opened
                 super().close()
         session.capture_factory=SlowCapture
-        start=asyncio.create_task(session.start(0,1,'short'))
+        start=asyncio.create_task(session.start(0,1,'short', options=live_options()))
         await asyncio.to_thread(entered.wait,.5)
         stop=asyncio.create_task(session.stop())
         await asyncio.sleep(.01)

@@ -87,7 +87,7 @@ class InterviewSetup(BaseModel):
     company: str = Field(default='', max_length=200)
     description: str = Field(default='', max_length=10000)
     notes: str = Field(default='', max_length=4000)
-    keyterms: bool = True
+    keyterms: bool = False
 
 
 class ProfileStore:

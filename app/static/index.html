@@ -7,7 +7,7 @@
 <section class="controls panel" aria-label="Session controls">
 <div class="device"><label for="mic">Your microphone</label><div class="select-row"><select id="mic" aria-label="Microphone device"></select><button id="test-mic" class="quiet">Test</button></div><meter id="level-me" min="0" max="1" value="0" aria-label="Microphone audio level"></meter><small id="status-me">Not capturing</small></div>
 <div class="device"><label for="system">Interviewer · system audio</label><div class="select-row"><select id="system" aria-label="System audio device"></select><button id="test-system" class="quiet">Test</button></div><meter id="level-interviewer" min="0" max="1" value="0" aria-label="System audio level"></meter><small id="status-interviewer">Select BlackHole; routing required</small></div>
-<div class="actions"><label for="length">Answer length</label><select id="length"><option value="short">Brief · 20–30 sec</option><option value="medium" selected>Standard · 45–60 sec</option><option value="long">Detailed · 90–120 sec</option></select><div class="select-row"><button id="start" class="primary">Start session</button><button id="stop" class="danger" disabled>Stop</button></div></div>
+<div class="actions"><label for="length">Answer length</label><select id="length"><option value="short">Brief · 20–30 sec</option><option value="medium" selected>Standard · 45–60 sec</option><option value="long">Detailed · 90–120 sec</option></select><div class="select-row"><button id="start" class="primary" disabled>Authorise live session</button><button id="stop" class="danger stop-all" disabled>STOP ALL</button></div></div>
 </section>
 <details class="panel interview-setup">
   <summary>Interview setup <span id="interview-selection"></span></summary>
@@ -17,8 +17,30 @@
     <div><label for="job-company">Company</label><input id="job-company" maxlength="200"></div>
     <div class="wide"><label for="job-description">Job description</label><textarea id="job-description" rows="4" maxlength="10000"></textarea></div>
     <div class="wide"><label for="job-notes">Role-specific notes</label><textarea id="job-notes" rows="2" maxlength="4000"></textarea></div>
-    <label class="wide keyterms"><input id="keyterms" type="checkbox" checked> Improve recognition of engineering terms (+$0.04 per audio channel-hour)</label>
+    <label class="wide keyterms"><input id="keyterms" type="checkbox"> Improve recognition of engineering terms (+$0.04 per audio channel-hour)</label>
   </div>
+</details>
+<details class="panel safety-panel">
+  <summary>Live session safety <strong id="live-mode" class="badge">LOCAL-ONLY</strong></summary>
+  <p>Live sessions send audio to AssemblyAI and selected interview context to Groq. Both services may charge. The estimate and cap cover transcription only and cannot cap the provider bill.</p>
+  <div class="setup-grid">
+    <div><label for="live-minutes">Session limit (minutes)</label><input id="live-minutes" type="number" min="1" max="1440" step="1" value="5"></div>
+    <div><label for="live-cap">Maximum transcription estimate (UGX)</label><input id="live-cap" type="number" min="0" max="1000000000" step="1" value="0"></div>
+  </div>
+  <details>
+    <summary>Exchange rate and provider billing checks</summary>
+    <div class="setup-grid">
+      <div><label for="live-fx">Verified UGX per US$1</label><input id="live-fx" type="number" min="0.0001" step="0.0001"></div>
+      <div><label for="live-fx-date">Exchange rate date</label><input id="live-fx-date" type="date"></div>
+      <div><label for="live-fx-source">Exchange rate source</label><input id="live-fx-source" maxlength="180"></div>
+    </div>
+    <label class="keyterms"><input type="checkbox" id="live-assembly-check"> I checked AssemblyAI billing status, free allowance and remaining credits in my account.</label>
+    <label class="keyterms"><input type="checkbox" id="live-groq-check"> I checked Groq billing status, free allowance and remaining credits in my account.</label>
+  </details>
+  <p id="live-quote" role="status">COST UNKNOWN — LIVE SESSION BLOCKED</p>
+  <p class="safety-source"><a id="live-price-source" href="https://www.assemblyai.com/pricing" target="_blank" rel="noreferrer">AssemblyAI pricing</a> <span id="live-price-date"></span></p>
+  <p id="live-billing" class="safety-warning">Provider billing status, free allowances and credits are unverified.</p>
+  <ul id="live-blockers"></ul>
 </details>
 <div class="status-row"><button id="open-profile" class="quiet">Professional profile &amp; CVs</button><span id="assembly">AssemblyAI: not connected</span><span id="groq">Groq: not checked</span><button id="refresh" class="text-button">Refresh devices</button></div>
 <p id="notice" role="status">Ready. No audio is captured until you start a session or test.</p><p id="error" role="alert" hidden></p>
@@ -27,7 +49,7 @@
   <section><h3>You</h3><div id="transcript-me" class="source-turns"></div></section>
 </div></section>
 <section class="panel answers-panel"><div class="section-top"><div><h2>Suggested answer</h2></div><button id="answer" class="quiet" disabled>Suggest answer</button></div><div id="answers" aria-live="polite"><p class="empty">Completed interviewer questions trigger a suggestion.<br>You can also request one manually.</p></div></section></div>
-<footer><span id="cost">Estimated AssemblyAI usage: $0.0000</span><span id="limit">Maximum session: 120 min</span><span>Cloud usage may consume credits or incur charges. Estimates exclude Groq and are not bills.</span></footer>
+<footer><span id="cost">Estimated AssemblyAI usage: $0.0000</span><span id="limit">Session limit: 5 min</span><span>Estimated usage excludes Groq, taxes and any provider charges after disconnect.</span></footer>
 </main>
 <dialog id="profile-dialog" aria-labelledby="profile-heading">
   <div class="section-top"><h2 id="profile-heading">Professional profile &amp; CVs</h2><button id="close-profile" class="quiet">Close</button></div>

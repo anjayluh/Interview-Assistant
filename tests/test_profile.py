@@ -18,6 +18,7 @@ from app.main import create_app
 from app.profile import InterviewContext, InterviewSetup, ProfileStore, SEED, experience
 from app.questions import is_question
 from tests.test_core import make_session
+from tests.live_helpers import live_options, start_command
 
 ORIGIN = {'origin': 'http://testserver'}
 PATH = '/api/profile'
@@ -219,7 +220,7 @@ def test_session_snapshot_and_privacy_between_interviews():
         session, _, answers = make_session()
         first = InterviewContext(setup=InterviewSetup(title='Private first role', keyterms=False),
                                  cv_facts='Django unique-first-interview-fact')
-        await session.start(0, 1, 'medium', first)
+        await session.start(0, 1, 'medium', first, live_options())
         assert all(not trans.use_keyterms for trans in session.transcribers.values())
         event = NS(transcript='How do you use Django?', turn_order=1, end_of_turn=True)
         session.turn('interviewer', event)
@@ -231,7 +232,7 @@ def test_session_snapshot_and_privacy_between_interviews():
         assert session.history[0]['text'].endswith('in production?')
         await session.stop()
         assert session.interview is None
-        await session.start(0, 1, 'medium', InterviewContext())
+        await session.start(0, 1, 'medium', InterviewContext(setup=InterviewSetup(keyterms=True)), live_options())
         assert all(trans.use_keyterms for trans in session.transcribers.values())
         assert not session.suggestions and not session.history
         session.turn('interviewer', event)
@@ -259,9 +260,9 @@ def test_websocket_start_snapshots_selected_cv_and_role(store):
         client.get('/')
         with client.websocket_connect('/ws?client=interview-test-123456', headers=ORIGIN) as ws:
             ws.receive_json()
-            ws.send_json({'cmd': 'start', 'mic': 0, 'system': 1, 'interview': {
+            ws.send_json(start_command(client, interview={
                 'cv_id': selected_id, 'title': 'Senior Backend Engineer', 'keyterms': False,
-            }})
+            }))
             assert ws.receive_json()['type'] == 'clear'
             assert ws.receive_json()['state'] == 'starting'
             assert ws.receive_json()['state'] == 'running'
