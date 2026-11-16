@@ -116,7 +116,7 @@
   }
 
   document.addEventListener('interview-ended', () => {
-    for (const id of ['job-title', 'job-company', 'job-description', 'job-notes']) $(id).value = '';
+    for (const id of ['job-title', 'job-company', 'job-description', 'job-notes', 'job-research']) $(id).value = '';
     $('interview-cv').value = data?.default_cv || '';
     showSelection();
   });

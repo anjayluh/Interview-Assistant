@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interview Copilot Companion</title><link rel="stylesheet" href="/static/style.css"><script src="/static/copilot.js" defer></script></head>
+<body data-companion="true"><header><h1>Interview Copilot</h1></header><main>
+<p id="phone-status" role="status">Open the private pairing link from the laptop.</p>
+<section class="panel copilot-tool"><h2>Suggested answers</h2><p id="phone-question"></p><div id="phone-answers"></div></section>
+<details class="panel copilot-tool">
+  <summary>Written questions &amp; coding challenges</summary>
+  <div class="copilot-actions">
+    <button id="copilot-screen" type="button">Capture screen or tab</button>
+    <label for="copilot-image">Extract text from an image</label>
+    <input type="file" id="copilot-image" accept="image/*">
+  </div>
+  <label for="copilot-question">Review the extracted problem or paste a question</label>
+  <textarea id="copilot-question" rows="5" maxlength="6000"></textarea>
+  <button id="copilot-answer" type="button">Suggest a response in the authorised live session</button>
+  <p id="copilot-message" role="status"></p>
+</details>
+<details class="panel copilot-tool" id="practice-panel">
+  <summary>Mock interview <span class="badge">LOCAL</span></summary>
+  <label for="practice-scenario">Scenario</label>
+  <select id="practice-scenario"></select>
+  <button id="practice-start" type="button">Start practice</button>
+  <p id="practice-question" aria-live="polite"></p>
+  <p id="practice-criteria"></p>
+  <details id="practice-support" hidden><summary>Relevant profile evidence</summary><p id="practice-evidence"></p></details>
+  <label for="practice-response">Your practice response</label>
+  <textarea id="practice-response" rows="4" maxlength="5000"></textarea>
+  <button id="practice-next" type="button" disabled>Get feedback and continue</button>
+  <p id="practice-feedback" aria-live="polite"></p>
+</details>
+</main></body></html>

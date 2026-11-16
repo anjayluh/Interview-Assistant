@@ -2,6 +2,7 @@ import asyncio
 import anyio
 import contextlib
 import logging
+import os
 import secrets
 import time
 import re
@@ -16,6 +17,7 @@ from .session import Session, safe_error
 from .profile import InterviewSetup, ProfileStore
 from .profile_api import LOCAL_ORIGINS, profile_routes
 from .cost import LiveOptions, quote
+from .copilot_api import LOCAL_HOSTS, copilot_routes, phone_hostname
 from pydantic import BaseModel, StrictBool
 
 HEARTBEAT_TIMEOUT = 15
@@ -72,7 +74,7 @@ class Controller:
         await self.stop('Backend shutting down.')
 
 
-def create_app(settings=None, profile_store=None):
+def create_app(settings=None, profile_store=None, phone_origin=None):
     # Provider debug/error payloads can contain request details.
     for name in ('assemblyai', 'groq', 'httpx', 'httpcore', 'websockets'):
         logger = logging.getLogger(name)
@@ -80,6 +82,8 @@ def create_app(settings=None, profile_store=None):
         logger.propagate = False
 
     settings = settings or Settings()
+    phone_origin = os.getenv('IA_PHONE_ORIGIN', '') if phone_origin is None else phone_origin
+    phone_host = phone_hostname(phone_origin)
     control = Controller(settings)
     token = secrets.token_urlsafe(32)
     pending_quote = None
@@ -110,10 +114,18 @@ def create_app(settings=None, profile_store=None):
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.control = control
     app.include_router(profile_routes(store, token))
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', 'testserver'])
+    app.include_router(copilot_routes(store, token, control, phone_origin))
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=[*LOCAL_HOSTS, *([phone_host] if phone_host else [])])
 
     @app.middleware('http')
     async def headers(request: Request, call_next):
+        if request.url.hostname == phone_host and not (
+            request.url.path == '/companion'
+            or request.url.path in {'/static/copilot.js', '/static/style.css'}
+            or request.url.path.startswith('/api/companion/')
+            or request.url.path in {'/api/copilot/scenarios', '/api/copilot/practice', '/api/copilot/ocr'}
+        ):
+            return JSONResponse({'error': 'Use the paired companion link.'}, status_code=403)
         response = await call_next(request)
         response.headers['Cache-Control'] = 'no-store'
         response.headers['X-Content-Type-Options'] = 'nosniff'
@@ -126,6 +138,10 @@ def create_app(settings=None, profile_store=None):
         response = FileResponse(ROOT / 'app/static/index.html')
         response.set_cookie('ia_access', token, httponly=True, samesite='strict')
         return response
+
+    @app.get('/companion')
+    async def companion():
+        return FileResponse(ROOT / 'app/static/companion.html')
 
     @app.get('/health')
     async def health():
@@ -172,7 +188,7 @@ def create_app(settings=None, profile_store=None):
         nonlocal pending_quote
         origin = ws.headers.get('origin', '')
         client_id = ws.query_params.get('client', '')
-        if (ws.cookies.get('ia_access') != token or origin not in
+        if (ws.url.hostname not in LOCAL_HOSTS or ws.cookies.get('ia_access') != token or origin not in
             LOCAL_ORIGINS or
             not re.fullmatch(r'[a-zA-Z0-9-]{16,64}', client_id)):
             await ws.close(code=1008)
@@ -232,7 +248,12 @@ def create_app(settings=None, profile_store=None):
                             raise ValueError('Start a session before requesting an answer.')
                         if control.session.answer_task and not control.session.answer_task.done():
                             raise ValueError('An answer is already being generated.')
-                        control.session.request_answer()
+                        question = data.get('question')
+                        if question is not None:
+                            if not isinstance(question, str) or not 1 <= len(question.strip()) <= 6000:
+                                raise ValueError('Enter a written question of up to 6,000 characters.')
+                            question = question.strip()
+                        control.session.request_answer(question)
                     else:
                         raise ValueError('Unknown action.')
                 except (KeyError, TypeError, ValueError) as exc:

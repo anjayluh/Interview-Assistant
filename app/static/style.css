@@ -62,3 +62,10 @@ input:focus-visible, textarea:focus-visible { outline: 2px solid var(--mint); ou
 .safety-source, #live-blockers { color: var(--muted); font-size: 13px; }
 .safety-warning { color: #ffb59f; font-weight: 650; }
 .stop-all:not(:disabled) { color: #fff; background: #a83027; border-color: #e67d6b; }
+.copilot-tool { margin-top: 12px; padding: 12px 20px; }
+.copilot-tool label { margin-top: 10px; }
+.copilot-tool button { margin-top: 8px; }
+.copilot-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.answer-points, #practice-evidence { white-space: pre-line; }
+#practice-criteria { color: var(--mint); }
+#phone-answers { max-height: 55vh; overflow: auto; }

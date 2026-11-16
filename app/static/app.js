@@ -25,7 +25,7 @@ function buttons() {
   $('mic').disabled = $('system').disabled = !idle;
   $('refresh').disabled = !idle;
   for (const id of safetyFields) $(id).disabled = !idle;
-  for (const id of ['interview-cv','job-title','job-company','job-description','job-notes','keyterms']) $(id).disabled = !idle;
+  for (const id of ['interview-cv','job-title','job-company','job-description','job-notes','job-research','keyterms']) $(id).disabled = !idle;
 }
 function clock() {
   $('duration').textContent = `${Math.floor(elapsed / 60).toString().padStart(2,'0')}:${Math.floor(elapsed % 60).toString().padStart(2,'0')}`;
@@ -73,39 +73,7 @@ function transcript(x) {
 }
 function answer(x) {
   $('answers').querySelector('.empty')?.remove();
-  const card = document.createElement('article'); card.className = 'answer-card';
-  const q = document.createElement('p'); q.className = 'question'; q.textContent = x.question;
-  const p = document.createElement('p'); p.className = 'response'; p.textContent = x.text;
-  const meta = document.createElement('p');
-  meta.className = 'answer-meta';
-  meta.textContent = [x.category, x.experience === 'Not applicable' ? '' : x.experience].filter(Boolean).join(' · ');
-  card.append(q, meta, p);
-  if (x.example) {
-    const example = document.createElement('p');
-    example.className = 'answer-example';
-    example.textContent = 'Personal example — ' + x.example;
-    card.append(example);
-  }
-  if (x.code || x.details) {
-    const more = document.createElement('details');
-    const summary = document.createElement('summary');
-    summary.textContent = x.code ? ['Code', x.language].filter(Boolean).join(' · ') : 'Technical detail';
-    more.append(summary);
-    if (x.code) {
-      const block = document.createElement('pre');
-      const code = document.createElement('code');
-      code.textContent = x.code;
-      block.append(code);
-      more.append(block);
-    }
-    if (x.details) {
-      const detail = document.createElement('p');
-      detail.textContent = x.details;
-      more.append(detail);
-    }
-    card.append(more);
-  }
-  $('answers').prepend(card);
+  $('answers').prepend(answerCard(x));
   while ($('answers').children.length > 12) $('answers').lastChild.remove();
   $('answers').scrollTop = 0;
 }
@@ -239,7 +207,7 @@ AssemblyAI will receive both audio streams. `
     interview: {
       cv_id: $('interview-cv').dataset.loaded ? $('interview-cv').value : null,
       title: $('job-title').value, company: $('job-company').value, description: $('job-description').value,
-      notes: $('job-notes').value, keyterms: $('keyterms').checked,
+      notes: $('job-notes').value, research: $('job-research').value, keyterms: $('keyterms').checked,
     }});
   showQuote({...data, quote_id: null});
 };

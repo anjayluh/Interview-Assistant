@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Interview Assistant</title><link rel="stylesheet" href="/static/style.css"><script src="/static/app.js" defer></script><script src="/static/profile.js" defer></script></head>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Interview Assistant</title><link rel="stylesheet" href="/static/style.css"><script src="/static/app.js" defer></script><script src="/static/copilot.js" defer></script><script src="/static/profile.js" defer></script></head>
 <body>
 <header><div><h1>Interview Assistant</h1></div><div class="session-info"><span id="connection" class="badge">Connecting…</span><strong id="duration">00:00</strong></div></header>
 <main>
@@ -17,6 +17,7 @@
     <div><label for="job-company">Company</label><input id="job-company" maxlength="200"></div>
     <div class="wide"><label for="job-description">Job description</label><textarea id="job-description" rows="4" maxlength="10000"></textarea></div>
     <div class="wide"><label for="job-notes">Role-specific notes</label><textarea id="job-notes" rows="2" maxlength="4000"></textarea></div>
+    <div class="wide"><label for="job-research">Company research, sources and verification dates</label><textarea id="job-research" maxlength="5000" rows="3"></textarea></div>
     <label class="wide keyterms"><input id="keyterms" type="checkbox"> Improve recognition of engineering terms (+$0.04 per audio channel-hour)</label>
   </div>
 </details>
@@ -41,6 +42,39 @@
   <p class="safety-source"><a id="live-price-source" href="https://www.assemblyai.com/pricing" target="_blank" rel="noreferrer">AssemblyAI pricing</a> <span id="live-price-date"></span></p>
   <p id="live-billing" class="safety-warning">Provider billing status, free allowances and credits are unverified.</p>
   <ul id="live-blockers"></ul>
+</details>
+<details class="panel copilot-tool">
+  <summary>Written questions &amp; coding challenges</summary>
+  <div class="copilot-actions">
+    <button id="copilot-screen" type="button">Capture screen or tab</button>
+    <label for="copilot-image">Extract text from an image</label>
+    <input type="file" id="copilot-image" accept="image/*">
+  </div>
+  <label for="copilot-question">Review the extracted problem or paste a question</label>
+  <textarea id="copilot-question" rows="5" maxlength="6000"></textarea>
+  <button id="copilot-answer" type="button">Suggest a response in the authorised live session</button>
+  <p id="copilot-message" role="status"></p>
+</details>
+<details class="panel copilot-tool" id="practice-panel">
+  <summary>Mock interview <span class="badge">LOCAL</span></summary>
+  <label for="practice-scenario">Scenario</label>
+  <select id="practice-scenario"></select>
+  <button id="practice-start" type="button">Start practice</button>
+  <p id="practice-question" aria-live="polite"></p>
+  <p id="practice-criteria"></p>
+  <details id="practice-support" hidden><summary>Relevant profile evidence</summary><p id="practice-evidence"></p></details>
+  <label for="practice-response">Your practice response</label>
+  <textarea id="practice-response" rows="4" maxlength="5000"></textarea>
+  <button id="practice-next" type="button" disabled>Get feedback and continue</button>
+  <p id="practice-feedback" aria-live="polite"></p>
+</details>
+<details class="panel copilot-tool">
+  <summary>Phone companion</summary>
+  <p>Pair a phone to view live answers, request written answers during the authorised session, and practise with the selected interview context.</p>
+  <button id="copilot-pair" type="button">Create pairing link</button>
+  <button id="copilot-unpair" type="button">Revoke link</button>
+  <label for="copilot-link">Private pairing link</label><input id="copilot-link" readonly>
+  <p id="copilot-pair-status" role="status"></p>
 </details>
 <div class="status-row"><button id="open-profile" class="quiet">Professional profile &amp; CVs</button><span id="assembly">AssemblyAI: not connected</span><span id="groq">Groq: not checked</span><button id="refresh" class="text-button">Refresh devices</button></div>
 <p id="notice" role="status">Ready. No audio is captured until you start a session or test.</p><p id="error" role="alert" hidden></p>

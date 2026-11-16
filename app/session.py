@@ -214,7 +214,7 @@ class Session:
                         if len(question_terms & terms(item['question'])) >= 2
                         and item['question'] != question][-2:]
             context = json.dumps({
-                'question': question[:2000],
+                'question': question[:6000],
                 'conversation': [{'speaker': x['role'], 'text': x['text'][:250]} for x in recent],
                 'relevant_prior_suggestions': [{'question': x['question'][:250], 'text': x['text'][:450]}
                                                for x in previous],

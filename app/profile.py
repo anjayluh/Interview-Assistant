@@ -87,6 +87,7 @@ class InterviewSetup(BaseModel):
     company: str = Field(default='', max_length=200)
     description: str = Field(default='', max_length=10000)
     notes: str = Field(default='', max_length=4000)
+    research: str = Field(default='', max_length=5000)
     keyterms: bool = False
 
 
@@ -256,5 +257,6 @@ class InterviewContext:
             'target_role': s.title, 'target_company': s.company,
             'job_description_excerpt': s.description[:1400],
             'role_notes': s.notes[:500],
+            'company_research_user_supplied': s.research[:1800],
         }
         return json.dumps(facts, ensure_ascii=False)

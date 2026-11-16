@@ -6,7 +6,8 @@ CATEGORIES = (
     'Behavioural', 'Professional background', 'Technical concept', 'Coding / algorithm',
     'Debugging / troubleshooting', 'System design', 'Software architecture', 'Database',
     'API / backend engineering', 'Frontend engineering', 'Cloud / DevOps', 'Security',
-    'Leadership', 'Other',
+    'Leadership', 'Company and role', 'Career motivation', 'People management',
+    'Operations and strategy', 'Situational judgement', 'Salary and logistics', 'Closing questions', 'Other',
 )
 EXPERIENCE = ('Direct experience', 'Working knowledge', 'Proposed approach', 'Needs clarification', 'Not applicable')
 ANSWER_SIZES = {'short': (55, 900), 'medium': (115, 1300), 'long': (230, 2000)}
@@ -15,14 +16,35 @@ SCHEMA = {
     'type': 'object', 'additionalProperties': False, 'required': list(FIELDS),
     'properties': {field: {'type': 'string'} for field in FIELDS},
 }
+SUPPORT_FIELDS = ('competency', 'secondary_competencies', 'talking_points', 'follow_ups')
+for field in SUPPORT_FIELDS:
+    SCHEMA['properties'][field] = {'type': 'string'}
+SCHEMA['required'].extend(SUPPORT_FIELDS)
+
 SCHEMA['properties']['category']['enum'] = list(CATEGORIES)
 SCHEMA['properties']['experience']['enum'] = list(EXPERIENCE)
 
 RULES = '''You write first-person spoken interview suggestions for an experienced engineer.
 Return one JSON object with category, text, experience, example, code, language, details.
+Infer the actual intent, even for indirect or compound prompts. Choose the dominant category,
+name the main competency in competency, and list any secondary competencies in
+secondary_competencies. Return short talking_points and plausible interviewer follow_ups,
+one per line. Answer all material parts of a compound question.
 Choose one category and experience label from the supplied lists. Put the direct spoken
 answer first in text. Put supplemental technical depth, edge cases and complexity in details.
 Use empty strings for unused example, code, language and details. Return code without fences.
+
+Strengthen every response, including familiar questions and questions the candidate has already
+answered. Infer what the interviewer is evaluating. Use the role and seniority to decide what
+would make an answer convincing. Lead with the strongest relevant conclusion, then add a brief
+reason, a concrete example, or the decision criteria. Look for one important consideration a
+competent first answer could miss. Weigh plausible alternatives and explain the decisive
+trade-off, business impact, or way to verify the outcome when it adds value. Use recent candidate
+speech to spot useful refinements, but never simply echo it or treat it as verified history.
+Use general professional and technical knowledge to improve relevance, structure, depth and delivery.
+Choose the strongest relevant verified example instead of listing the CV. Keep general
+recommendations and hypothetical examples clearly distinct from verified personal experience.
+Make talking points short, actionable cues that add value beyond the spoken response.
 
 Speak in conversational professional English. Lead with the answer. Use contractions naturally,
 plain verbs and concrete examples. Avoid restating the question, generic introductions, buzzwords,
@@ -45,13 +67,31 @@ If asked why a role ended and no reason is supplied, say the reason needs clarif
 For example, copy one relevant achievement or CV fact exactly as provided, or return an empty string.
 Put any conversational paraphrase in text and preserve contribution wording.
 
+Company and role: use the supplied research with its sources and job description. Label unverified
+information and distinguish facts from assumptions. If evidence is missing, use what is known about
+the role and frame company details as questions to confirm. Never invent company facts.
+Career motivation: use verified career progression; ask for missing motivations or goals.
+Leadership and people management: show how you diagnose the issue, communicate, take ownership
+and follow through. Use supported examples, distinguish mentoring from formal management, and
+never assume direct reports or team size. For behavioural questions, surface the decision,
+the outcome and the learning when supported by evidence.
+Operations and strategy: connect priorities and trade-offs to customer or business outcomes,
+stakeholder alignment and a meaningful measure of success. For company questions tie the role
+to a verified business need or frame the need explicitly as an assumption to validate.
+Situational judgement: clarify assumptions, give concrete actions and describe what you would verify next.
+Salary and logistics: offer tactful phrasing; never invent salary, notice, availability or other interviews.
+Closing: suggest thoughtful role-specific questions or a brief evidence-backed closing statement.
+For a written problem, extract requirements in details, cover algorithms, edge cases, test cases and
+complexity, and provide readable code that the user can review. Never claim to have run the code.
 Behavioural: use a genuine situation, action and result where supported.
 Professional background: prioritise the experience claim, role fit and one supported example.
 Technical concept: explain the mechanism, a practical example and a meaningful trade-off.
 System design and architecture: clarify assumptions, then describe components, flow, storage,
 scale, failure handling, security, observability and trade-offs in proportion to the question.
-Coding: explain the approach, include working code in the requested language, then edge cases
-and time/space complexity. Use Python when no language is specified.
+Coding: compare a straightforward baseline with a better option when constraints justify it.
+Choose a readable, efficient implementation and explain why it fits. Include
+working code in the requested language, targeted edge cases, representative tests and time/space complexity.
+Avoid needless optimisation. Use Python when no language is specified.
 Debugging: describe the first check, reproduction, logs/metrics/traces, likely causes, verification
 and prevention. For database, backend, frontend, DevOps, security and leadership questions,
 give concrete choices, practical validation and the most relevant trade-off.'''
@@ -67,7 +107,11 @@ def parse_answer(content):
     except (TypeError, ValueError):
         raise ValueError('Groq returned an incomplete answer. Use Suggest answer to try again.') from None
     limits = {'text': 4200, 'example': 1200, 'code': 5000, 'language': 50, 'details': 2600}
-    return {field: data[field].strip()[:limits.get(field, 100)] for field in FIELDS}
+    answer = {field: data[field].strip()[:limits.get(field, 100)] for field in FIELDS}
+    for field in SUPPORT_FIELDS:
+        value = data.get(field, '')
+        answer[field] = value.strip()[:700] if isinstance(value, str) else ''
+    return answer
 
 
 class Answers:

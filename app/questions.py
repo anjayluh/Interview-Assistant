@@ -7,12 +7,21 @@ def normalize(text):
 
 def is_question(text):
     words = normalize(text)
-    if len(words.split()) < 3:
+    if not words:
         return False
-    if '?' in text:
+    if '?' in text or words in {'why', 'how so', 'any questions', 'and then', 'what next'}:
         return True
-    return bool(re.match(r'(?:(?:so|and|okay|right|now) )?(what|why|how|when|where|which|who)\b', words) or
-                re.match(r'(tell me|walk me|describe|explain|compare|design|implement|write|debug|optimise|optimize|discuss|give (me |us )?an example|can you|could you|would you|have you|do you|did you)\b', words))
+    return bool(re.search(
+        r'(?:^|[.!?]\s+|,\s+)(?:(?:so|and|okay|right|now|please)\s+)*'
+        r'(?:what|why|how|when|where|which|who|tell (?:me|us)|walk (?:me|us)|'
+        r'describe|explain|compare|design|implement|write|debug|optimise|optimize|discuss|'
+        r'give (?:me |us )?an example|(?:can|could|would|have|do|did|will|are) you|'
+        r'is there|any questions|say more|help (?:me|us) understand)\b', text, re.I
+    ) or re.search(
+        r"\b(?:i(?:'d| would) like to (?:hear|know|understand)|i(?:'m| am) curious|"
+        r"we(?:'d| would) like to (?:hear|know|understand)|i wonder)\b", text, re.I
+    ))
+
 
 class QuestionGate:
     def __init__(self):
