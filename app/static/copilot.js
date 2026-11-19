@@ -53,12 +53,9 @@ function answerCard(x) {
   const get = id => document.getElementById(id);
   const phone = document.body.dataset.companion === 'true';
   const hash = location.hash.slice(1);
-  if (phone && hash) {
-    sessionStorage.setItem('iaPair', hash);
-    history.replaceState(null, '', location.pathname);
-  }
-  const pair = phone ? sessionStorage.getItem('iaPair') : '';
-  const options = {headers: pair ? {Authorization: 'Bearer ' + pair} : {}};
+  if (phone && hash) history.replaceState(null, '', location.pathname);
+  const options = {headers: {}};
+  if (phone && sessionStorage.getItem('iaDevice')) options.headers.Authorization = 'Bearer ' + sessionStorage.getItem('iaDevice');
 
   async function api(path, method = 'GET', body, binary = false) {
     const headers = {...options.headers};
@@ -67,7 +64,7 @@ function answerCard(x) {
       method, headers, body: binary ? body : body ? JSON.stringify(body) : undefined,
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Check the request fields.');
+    if (!response.ok) { const error = new Error(typeof result.detail === 'string' ? result.detail : 'Check the request fields.'); error.status = response.status; throw error; }
     return result;
   }
 
@@ -180,38 +177,111 @@ function answerCard(x) {
   get('practice-next').onclick = () => practice(true);
 
   if (!phone) {
+    let pendingId = '', pairingActive = false;
+    function showPair(state) {
+      pairingActive = Boolean(state.url || state.pending || state.device);
+      get('phone-invite').hidden = !state.url;
+      if (state.url) {
+        if (get('copilot-link').href !== state.url) get('phone-qr').src = '/api/copilot/pair/qr?t=' + Date.now();
+        get('copilot-link').href = state.url;
+        get('copilot-link').textContent = state.url;
+        get('phone-entry').href = state.entry_url;
+        get('phone-entry').textContent = state.entry_url;
+        get('phone-code').textContent = state.code;
+      }
+      pendingId = state.pending?.id || '';
+      get('phone-pending').hidden = !pendingId;
+      if (state.pending) get('phone-request').textContent = `${state.pending.name} (${state.pending.peer}) requests access. Check that ${state.pending.comparison} matches the phone before approving.`;
+      get('copilot-pair-status').textContent = state.device
+        ? `${state.device.name} · ${state.device.peer} · ${state.device.connected ? 'Connected' : 'Disconnected — waiting to reconnect'} · Access expires in ${Math.ceil(state.device.expires_in / 60)} minutes.`
+        : state.pending ? 'Waiting for your approval on this Mac.'
+        : state.url ? `Pairing expires in ${state.expires_in} seconds. Keep both devices on the same Wi-Fi.` : 'No active pairing invitation or approved device. Click Pair Phone.';
+    }
+    get('phone-networks').onclick = async () => {
+      try {
+        const choices = await api('copilot/pair/networks');
+        get('phone-network').replaceChildren(new Option('Automatic', ''), ...choices.map(x => new Option(`${x.label || x.name} · ${x.address}`, x.address)));
+      } catch (error) { get('copilot-pair-status').textContent = error.message; }
+    };
     get('copilot-pair').onclick = async () => {
       try {
-        get('copilot-link').value = (await api('copilot/pair', 'POST', setup())).url;
-        get('copilot-pair-status').textContent = 'Open this private link on your phone. It expires in two hours.';
-      } catch (error) { get('copilot-pair-status').textContent = error.message; }
+        showPair(await api('copilot/pair?address=' + encodeURIComponent(get('phone-network').value || ''), 'POST', setup()));
+      } catch (error) { get('phone-invite').hidden = true; get('copilot-pair-status').textContent = error.message; }
     };
     get('copilot-unpair').onclick = async () => {
-      try {
-        await api('copilot/pair', 'DELETE');
-        get('copilot-link').value = '';
-        get('copilot-pair-status').textContent = 'Phone link revoked.';
-      } catch (error) { get('copilot-pair-status').textContent = error.message; }
+      try { await api('copilot/pair', 'DELETE'); showPair(await api('copilot/pair')); }
+      catch (error) { get('copilot-pair-status').textContent = error.message; }
     };
-  } else if (pair) {
-    let rendered = '';
+    for (const decision of ['approve', 'reject']) get('phone-' + decision).onclick = async () => {
+      try { showPair(await api(`copilot/pair/${pendingId}/${decision}`, 'POST')); }
+      catch (error) { get('copilot-pair-status').textContent = error.message; }
+    };
+    async function pairingStatus() {
+      try { const state = await api('copilot/pair'); if (state.url || state.pending || state.device || pairingActive) showPair(state); }
+      catch (_) { /* The laptop connection indicator handles backend restarts. */ }
+      setTimeout(pairingStatus, 1500);
+    }
+    pairingStatus();
+  } else {
+    let rendered = '', polling = false;
     async function refresh() {
+      if (!options.headers.Authorization || polling) return;
+      polling = true;
       try {
         const state = await api('companion/state');
-        get('phone-status').textContent = state.state === 'running' ? 'Live session on laptop' : 'Local practice';
+        get('phone-pairing').hidden = true;
+        get('phone-status').textContent = state.state === 'running' ? 'Connected · Live session controlled on the Mac' : 'Connected · Local practice';
         get('phone-question').textContent = state.latest;
         const answers = JSON.stringify(state.answers);
         if (rendered !== answers) {
           rendered = answers;
           get('phone-answers').replaceChildren(...state.answers.slice().reverse().map(answerCard));
         }
-        setTimeout(refresh, 1500);
       } catch (error) {
-        get('phone-answers').replaceChildren();
-        get('phone-question').textContent = '';
-        get('phone-status').textContent = error.message + ' Reload after pairing again.';
-      }
+        get('phone-answers').replaceChildren(); get('phone-question').textContent = ''; rendered = '';
+        if (error.status === 403) {
+          sessionStorage.removeItem('iaDevice'); delete options.headers.Authorization;
+          get('phone-pairing').hidden = false; get('phone-status').textContent = error.message;
+        } else get('phone-status').textContent = 'Disconnected. Reconnecting automatically when the Mac is reachable…';
+      } finally { polling = false; setTimeout(refresh, 1500); }
     }
-    refresh();
+    let waiting = false;
+    async function approval() {
+      const secret = sessionStorage.getItem('iaPending');
+      if (!secret || waiting) return;
+      waiting = true;
+      try {
+        options.headers.Authorization = 'Bearer ' + secret;
+        const result = await api('companion/approval');
+        delete options.headers.Authorization;
+        if (result.decision === 'approved') {
+          sessionStorage.removeItem('iaPending'); sessionStorage.setItem('iaDevice', result.token);
+          options.headers.Authorization = 'Bearer ' + result.token;
+          get('phone-pairing').hidden = true; refresh();
+        } else if (result.decision === 'rejected') {
+          sessionStorage.removeItem('iaPending'); get('phone-status').textContent = 'The Mac rejected this request. Pair again to request access.';
+        } else { get('phone-status').textContent = 'Waiting for approval on the Mac…'; setTimeout(approval, 1500); }
+      } catch (error) {
+        delete options.headers.Authorization;
+        get('phone-status').textContent = error.message;
+        if (error.status === 403) sessionStorage.removeItem('iaPending');
+        else setTimeout(approval, 2000);
+      } finally { waiting = false; }
+    }
+    get('phone-connect').onclick = async () => {
+      try {
+        delete options.headers.Authorization;
+        const result = await api('companion/claim', 'POST', {code: get('phone-pair-code').value.trim(), name: get('phone-device-name').value.trim() || 'iPhone Safari'});
+        sessionStorage.setItem('iaPending', result.secret);
+        sessionStorage.setItem('iaComparison', result.comparison);
+        get('phone-comparison').textContent = 'Compare this code on the Mac: ' + result.comparison;
+        get('phone-pair-code').value = ''; approval();
+      } catch (error) { get('phone-status').textContent = error.message; }
+    };
+    if (hash) { get('phone-pair-code').value = hash; get('phone-connect').click(); }
+    else if (sessionStorage.getItem('iaDevice')) refresh();
+    else if (sessionStorage.getItem('iaPending')) {
+      get('phone-comparison').textContent = 'Compare this code on the Mac: ' + sessionStorage.getItem('iaComparison'); approval();
+    }
   }
 })();

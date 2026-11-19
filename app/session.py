@@ -162,6 +162,7 @@ class Session:
 
     def fatal(self, message):
         if self.state in ('running', 'starting') and (not self.fatal_task or self.fatal_task.done()):
+            message = message.rstrip('.') + '. Live transcription and cloud answers are stopped; local practice, CV tools and phone pairing remain available.'
             self.emit({'type': 'error', 'message': message})
             self.fatal_task = asyncio.create_task(self.stop(message))
 

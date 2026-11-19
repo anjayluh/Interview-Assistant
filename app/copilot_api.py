@@ -1,13 +1,11 @@
 """Local written capture and practice, plus an opt-in phone companion."""
 import asyncio
-import secrets
 import subprocess
-import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from .practice import BANK, MIXED, PracticeTurn, practice
@@ -16,16 +14,6 @@ from .profile_api import LOCAL_ORIGINS
 
 MAX_IMAGE = 8 * 1024 * 1024
 LOCAL_HOSTS = {'localhost', '127.0.0.1', 'testserver'}
-
-
-def phone_hostname(origin):
-    if not origin:
-        return None
-    parsed = urlsplit(origin)
-    if (parsed.scheme != 'https' or not parsed.hostname or parsed.hostname in LOCAL_HOSTS
-            or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment):
-        raise ValueError('IA_PHONE_ORIGIN must be an HTTPS origin with no path.')
-    return parsed.hostname
 
 
 def recognize(image):
@@ -54,42 +42,99 @@ class WrittenQuestion(BaseModel):
     question: str = Field(min_length=1, max_length=6000)
 
 
-def copilot_routes(store, token, control, phone_origin=''):
+def copilot_routes(store, token, control, phone):
     router = APIRouter()
-    phone_host = phone_hostname(phone_origin)
-    pair = None
     setup = InterviewSetup()
     ocr_lock = asyncio.Lock()
 
     def local(request):
-        return (request.url.hostname in LOCAL_HOSTS and request.cookies.get('ia_access') == token
+        return (not getattr(request.state, 'phone_listener', False) and request.url.hostname in LOCAL_HOSTS and request.cookies.get('ia_access') == token
                 and (request.method == 'GET' or request.headers.get('origin') in LOCAL_ORIGINS))
 
     def authorize(request):
         if local(request):
             return False
-        if (pair and time.monotonic() < pair[1] and request.url.hostname == phone_host
-                and (request.method == 'GET' or request.headers.get('origin') == phone_origin)
-                and secrets.compare_digest(request.headers.get('authorization', ''), 'Bearer ' + pair[0])):
-            return True
-        raise HTTPException(403, 'Open the local app or pair the phone from the laptop.')
+        phone.authorize(request)
+        return True
+
+    def require_local(request):
+        if not local(request):
+            raise HTTPException(403, 'Use the Mac to manage pairing.')
+
+    @router.get('/api/copilot/pair')
+    async def pair_status(request: Request):
+        require_local(request)
+        return phone.status()
+
+    @router.get('/api/copilot/pair/networks')
+    async def networks(request: Request):
+        require_local(request)
+        from .phone import interfaces
+        try:
+            return await asyncio.to_thread(interfaces)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    @router.get('/api/copilot/pair/qr')
+    async def pair_qr(request: Request):
+        require_local(request)
+        return Response(phone.qr(), media_type='image/svg+xml')
 
     @router.post('/api/copilot/pair')
-    async def pair_phone(request: Request, interview: InterviewSetup):
-        nonlocal pair, setup
-        if not local(request) or not phone_origin:
-            raise HTTPException(403, 'Phone access requires an optional HTTPS forwarding setup.')
-        setup = interview
-        pair = (secrets.token_urlsafe(32), time.monotonic() + 7200)
-        return {'url': phone_origin + '/companion#' + pair[0]}
+    async def pair_phone(request: Request, interview: InterviewSetup, address: str | None = None):
+        nonlocal setup
+        require_local(request)
+        async with phone.lock:
+            try:
+                await phone.start(address)
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from None
+            setup = interview
+            return phone.create()
+
+    @router.post('/api/copilot/pair/{identifier}/{decision}')
+    async def decide(request: Request, identifier: str, decision: str):
+        require_local(request)
+        if decision not in {'approve', 'reject'}:
+            raise HTTPException(400, 'Choose approve or reject.')
+        phone.decision(identifier, decision == 'approve')
+        return phone.status()
 
     @router.delete('/api/copilot/pair')
     async def unpair_phone(request: Request):
-        nonlocal pair, setup
-        if not local(request):
-            raise HTTPException(403, 'Unpair from the laptop.')
-        pair, setup = None, InterviewSetup()
-        return {'status': 'unpaired'}
+        nonlocal setup
+        require_local(request)
+        async with phone.lock:
+            await phone.close()
+            setup = InterviewSetup()
+        return {'status': 'revoked'}
+
+    @router.post('/api/companion/claim')
+    async def claim(request: Request):
+        if not getattr(request.state, 'phone_listener', False):
+            raise HTTPException(403, 'Open the local-network companion URL.')
+        # Small bounded fields; never accept arbitrary device metadata or tokens.
+        raw = bytearray()
+        async for chunk in request.stream():
+            raw.extend(chunk)
+            if len(raw) > 1024:
+                raise HTTPException(413, 'Pairing request too large.')
+        import json
+        try:
+            data = json.loads(raw)
+            value, name = data['code'], data.get('name', 'iPhone Safari')
+            if not isinstance(value, str) or not isinstance(name, str) or len(value) > 100 or len(name) > 80:
+                raise ValueError()
+            value.encode('ascii')
+        except (ValueError, KeyError, TypeError):
+            raise HTTPException(400, 'Enter the pairing code shown on the Mac.') from None
+        return phone.claim(value, name, request.client.host)
+
+    @router.get('/api/companion/approval')
+    async def approval(request: Request):
+        if not getattr(request.state, 'phone_listener', False):
+            raise HTTPException(403, 'Open the local-network companion URL.')
+        return phone.approval(request.headers.get('authorization', '').removeprefix('Bearer '))
 
     @router.get('/api/copilot/scenarios')
     async def scenarios(request: Request):

@@ -18,7 +18,7 @@ WS = '/ws?client=safety-tests-12345678'
 
 
 def test_free_session_defaults_and_limits():
-    assert LiveOptions().minutes == 5
+    assert LiveOptions().minutes == 60
     assert LiveOptions().cap_ugx == 0
     free = Quote(live_options(), 120)
     assert free.public()['maximum_payment_ugx'] == 0
@@ -136,18 +136,18 @@ def test_single_use_quote_and_stop_all_cancels_generation():
                 pytest.fail('Replayed quote was not rejected')
 
 
-def test_five_minute_deadline_advances_backend_without_browser_timer():
+def test_selected_deadline_advances_backend_without_browser_timer():
     async def check():
         session, _, _ = make_session()
         loop = asyncio.get_running_loop()
         clock = loop.time
         before = clock()
         await session.start(0, 1, 'medium', options=live_options())
-        assert 300 <= session.deadline - before <= 301
+        assert 3600 <= session.deadline - before <= 3601
         captures = list(session.captures.values())
         streams = list(session.transcribers.values())
         await asyncio.sleep(.02)
-        loop.time = lambda: clock() + 301
+        loop.time = lambda: clock() + 3601
         try:
             for _ in range(40):
                 if session.state == 'idle':
@@ -237,7 +237,7 @@ def test_deadline_includes_provider_startup():
         captures = list(session.captures.values())
         streams = list(session.transcribers.values())
         assert len(streams) == 1
-        loop.time = lambda: clock() + 301
+        loop.time = lambda: clock() + 3601
         try:
             with pytest.raises(ValueError, match='duration limit during startup'):
                 await asyncio.wait_for(start, 1)

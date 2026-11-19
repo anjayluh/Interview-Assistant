@@ -30,12 +30,12 @@
   <summary>Live session safety <strong id="live-mode" class="badge">LOCAL-ONLY</strong></summary>
   <p><strong>FREE USAGE ONLY</strong> · Use your AssemblyAI trial credits and Groq Free-plan capacity. Your confirmed account setup has no payment methods or authorised paid billing.</p>
   <div class="setup-grid">
-    <div><label for="live-minutes">Session limit (minutes)</label><input id="live-minutes" type="number" min="1" max="1440" step="1" value="5"></div>
+    <div><label for="live-minutes">Session limit (minutes)</label><input id="live-minutes" type="number" min="5" max="120" step="1" value="60"></div>
     <div><label for="live-cap">Maximum user expenditure (UGX)</label><input id="live-cap" type="number" value="0" readonly></div>
   </div>
   <p id="live-quote" role="status">Checking local session settings…</p>
   <ul id="live-blockers"></ul>
-  <p>Providers determine available free credits and rate limits. The app stops on exhausted allowance, rate-limit or access errors. Provider requests are never automatically retried.</p>
+  <p>The selected duration is a maximum, not a promise that free allowances cover the full interview. Providers determine available free credits and rate limits. The app stops on exhausted allowance, rate-limit or access errors. Provider requests are never automatically retried.</p>
 </details>
 <details class="panel copilot-tool">
   <summary>Written questions &amp; coding challenges</summary>
@@ -65,10 +65,19 @@
 <details class="panel copilot-tool">
   <summary>Phone companion</summary>
   <p>Pair a phone to view live answers, request written answers during the authorised session, and practise with the selected interview context.</p>
-  <button id="copilot-pair" type="button">Create pairing link</button>
-  <button id="copilot-unpair" type="button">Revoke link</button>
-  <label for="copilot-link">Private pairing link</label><input id="copilot-link" readonly>
-  <p id="copilot-pair-status" role="status"></p>
+  <p>Connect the Mac and iPhone to the same trusted Wi-Fi. Scan the QR code, then approve the matching request on this Mac.</p>
+  <label for="phone-network">Mac network address</label><select id="phone-network"><option value="">Automatic</option></select>
+  <button id="phone-networks" type="button">Refresh network addresses</button>
+  <button id="copilot-pair" type="button">Pair Phone</button>
+  <button id="copilot-unpair" type="button">Revoke Device</button>
+  <p>If Safari cannot reach the address, check that both devices use the same Wi-Fi, allow this app through the Mac firewall, and avoid guest networks that isolate devices. Allow local-network access if macOS or Safari asks.</p>
+  <div id="phone-invite" hidden>
+    <img id="phone-qr" width="260" height="260" alt="Scan to pair your iPhone">
+    <p><a id="copilot-link" target="_blank" rel="noreferrer">Open local pairing URL</a></p>
+    <p>Or open <a id="phone-entry" target="_blank" rel="noreferrer"></a> and enter code <strong id="phone-code"></strong>.</p>
+  </div>
+  <div id="phone-pending" hidden><p id="phone-request"></p><button id="phone-approve" type="button">Approve Device</button><button id="phone-reject" type="button">Reject</button></div>
+  <p id="copilot-pair-status" role="status">No phone paired.</p>
 </details>
 <div class="status-row"><button id="open-profile" class="quiet">Professional profile &amp; CVs</button><span id="assembly">AssemblyAI: not connected</span><span id="groq">Groq: not checked</span><button id="refresh" class="text-button">Refresh devices</button></div>
 <p id="notice" role="status">Ready. No audio is captured until you start a session or test.</p><p id="error" role="alert" hidden></p>

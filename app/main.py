@@ -10,14 +10,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .config import Settings, ROOT
 from .audio import devices
 from .session import Session, safe_error
 from .profile import InterviewSetup, ProfileStore
 from .profile_api import LOCAL_ORIGINS, profile_routes
 from .cost import LiveOptions, quote
-from .copilot_api import LOCAL_HOSTS, copilot_routes, phone_hostname
+from .copilot_api import LOCAL_HOSTS, copilot_routes
+from .phone import Phone
 from pydantic import BaseModel, StrictBool
 
 HEARTBEAT_TIMEOUT = 15
@@ -74,7 +74,7 @@ class Controller:
         await self.stop('Backend shutting down.')
 
 
-def create_app(settings=None, profile_store=None, phone_origin=None):
+def create_app(settings=None, profile_store=None):
     # Provider debug/error payloads can contain request details.
     for name in ('assemblyai', 'groq', 'httpx', 'httpcore', 'websockets'):
         logger = logging.getLogger(name)
@@ -82,8 +82,7 @@ def create_app(settings=None, profile_store=None, phone_origin=None):
         logger.propagate = False
 
     settings = settings or Settings()
-    phone_origin = os.getenv('IA_PHONE_ORIGIN', '') if phone_origin is None else phone_origin
-    phone_host = phone_hostname(phone_origin)
+    phone = Phone()
     control = Controller(settings)
     token = secrets.token_urlsafe(32)
     pending_quote = None
@@ -109,27 +108,30 @@ def create_app(settings=None, profile_store=None, phone_origin=None):
     @asynccontextmanager
     async def lifespan(app):
         yield
-        await control.close()
+        try:
+            await control.close()
+        finally:
+            await phone.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.control = control
+    app.state.phone = phone
+    phone.app = app
     app.include_router(profile_routes(store, token))
-    app.include_router(copilot_routes(store, token, control, phone_origin))
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=[*LOCAL_HOSTS, *([phone_host] if phone_host else [])])
+    app.include_router(copilot_routes(store, token, control, phone))
 
     @app.middleware('http')
     async def headers(request: Request, call_next):
-        if request.url.hostname == phone_host and not (
-            request.url.path == '/companion'
-            or request.url.path in {'/static/copilot.js', '/static/style.css'}
-            or request.url.path.startswith('/api/companion/')
-            or request.url.path in {'/api/copilot/scenarios', '/api/copilot/practice', '/api/copilot/ocr'}
+        if not getattr(request.state, 'phone_listener', False) and (
+            request.url.hostname not in LOCAL_HOSTS
+            or request.client.host not in {'127.0.0.1', '::1', 'testclient'}
         ):
-            return JSONResponse({'error': 'Use the paired companion link.'}, status_code=403)
+            return JSONResponse({'detail': 'Open the laptop app on localhost.'}, status_code=400)
         response = await call_next(request)
         response.headers['Cache-Control'] = 'no-store'
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['Referrer-Policy'] = 'no-referrer'
         response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
         return response
 
@@ -188,7 +190,8 @@ def create_app(settings=None, profile_store=None, phone_origin=None):
         nonlocal pending_quote
         origin = ws.headers.get('origin', '')
         client_id = ws.query_params.get('client', '')
-        if (ws.url.hostname not in LOCAL_HOSTS or ws.cookies.get('ia_access') != token or origin not in
+        if (getattr(ws.state, 'phone_listener', False) or ws.client.host not in {'127.0.0.1', '::1', 'testclient'}
+            or ws.url.hostname not in LOCAL_HOSTS or ws.cookies.get('ia_access') != token or origin not in
             LOCAL_ORIGINS or
             not re.fullmatch(r'[a-zA-Z0-9-]{16,64}', client_id)):
             await ws.close(code=1008)

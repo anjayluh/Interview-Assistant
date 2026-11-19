@@ -4,6 +4,7 @@
 <title>Interview Copilot Companion</title><link rel="stylesheet" href="/static/style.css"><script src="/static/copilot.js" defer></script></head>
 <body data-companion="true"><header><h1>Interview Copilot</h1></header><main>
 <p id="phone-status" role="status">Open the private pairing link from the laptop.</p>
+<section id="phone-pairing" class="panel"><label for="phone-device-name">Device name</label><input id="phone-device-name" maxlength="80" value="iPhone Safari"><label for="phone-pair-code">Pairing code from the Mac</label><input id="phone-pair-code" maxlength="100" autocomplete="off"><button id="phone-connect" type="button">Request pairing</button><p id="phone-comparison"></p></section>
 <section class="panel copilot-tool"><h2>Suggested answers</h2><p id="phone-question"></p><div id="phone-answers"></div></section>
 <details class="panel copilot-tool">
   <summary>Written questions &amp; coding challenges</summary>

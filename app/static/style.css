@@ -69,3 +69,7 @@ input:focus-visible, textarea:focus-visible { outline: 2px solid var(--mint); ou
 .answer-points, #practice-evidence { white-space: pre-line; }
 #practice-criteria { color: var(--mint); }
 #phone-answers { max-height: 55vh; overflow: auto; }
+
+#phone-qr { display:block; max-width:100%; height:auto; background:white; }
+#phone-invite a { overflow-wrap:anywhere; }
+#phone-pending { border:1px solid currentColor; border-radius:8px; padding:12px; margin-top:12px; }

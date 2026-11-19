@@ -4,6 +4,7 @@ from pathlib import Path
 from dataclasses import dataclass
 import certifi
 from dotenv import load_dotenv
+from .cost import MIN_MINUTES, MAX_MINUTES
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / '.env')
@@ -17,7 +18,7 @@ def configured_maximum():
         minutes = float(os.getenv('MAX_SESSION_MINUTES', '120'))
     except ValueError:
         return 0
-    return minutes if math.isfinite(minutes) and 0 < minutes <= 1440 else 0
+    return minutes if math.isfinite(minutes) and MIN_MINUTES <= minutes <= MAX_MINUTES else 0
 
 
 @dataclass

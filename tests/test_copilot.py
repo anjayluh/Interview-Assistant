@@ -1,3 +1,4 @@
+from tests.phone_helpers import configure_phone, pair
 import json
 from unittest.mock import Mock
 
@@ -70,7 +71,7 @@ def test_local_ocr_and_practice_do_not_touch_providers(monkeypatch):
     provider = Mock(side_effect=AssertionError('Provider must not be used'))
     monkeypatch.setattr('app.answers.AsyncGroq', provider)
     monkeypatch.setattr('app.transcription.AsyncStreamingClient', provider)
-    with TestClient(create_app(phone_origin='')) as client:
+    with TestClient(create_app()) as client:
         assert client.get('/api/copilot/scenarios').status_code == 403
         client.get('/')
         assert MIXED in client.get('/api/copilot/scenarios').json()
@@ -84,15 +85,14 @@ def test_local_ocr_and_practice_do_not_touch_providers(monkeypatch):
     provider.assert_not_called()
 
 
-def test_phone_scope_pair_and_revoke():
-    app = create_app(phone_origin='https://phone.example')
-    with TestClient(app) as laptop, TestClient(app, base_url='https://phone.example') as phone:
+def test_phone_scope_pair_and_revoke(monkeypatch):
+    app = create_app()
+    with TestClient(app) as laptop, configure_phone(app, monkeypatch) as phone:
         laptop.get('/')
         assert phone.get('/').status_code == 403
         assert phone.get('/companion').status_code == 200
         assert phone.get('/api/companion/state').status_code == 403
-        pair = laptop.post('/api/copilot/pair', headers=ORIGIN, json={'company': 'Sample'}).json()
-        headers = {'Authorization': 'Bearer ' + pair['url'].split('#')[1], 'Origin': 'https://phone.example'}
+        headers = pair(laptop, phone)
         assert phone.get('/api/companion/state', headers=headers).json()['state'] == 'idle'
         assert phone.get('/api/profile', headers=headers).status_code == 403
         assert phone.post('/api/live-quote', headers=headers, json={}).status_code == 403
@@ -103,20 +103,19 @@ def test_phone_scope_pair_and_revoke():
         assert phone.get('/api/companion/state', headers=headers).status_code == 403
 
 
-def test_phone_written_question_uses_laptop_session_without_starting_streams():
+def test_phone_written_question_uses_laptop_session_without_starting_streams(monkeypatch):
     from tests.live_helpers import start_command
     from tests.test_core import FakeAnswers, FakeCapture, FakeTranscriber
 
-    app = create_app(phone_origin='https://phone.example')
+    app = create_app()
     session = app.state.control.session
     session.settings.assembly_key = session.settings.groq_key = 'fake'
     session.capture_factory = FakeCapture
     session.transcriber_factory = FakeTranscriber
     session.answers = FakeAnswers()
-    with TestClient(app) as laptop, TestClient(app, base_url='https://phone.example') as phone:
+    with TestClient(app) as laptop, configure_phone(app, monkeypatch) as phone:
         laptop.get('/')
-        url = laptop.post('/api/copilot/pair', headers=ORIGIN, json={}).json()['url']
-        headers = {'Authorization': 'Bearer ' + url.split('#')[1], 'Origin': 'https://phone.example'}
+        headers = pair(laptop, phone)
         with laptop.websocket_connect('/ws?client=copilot-test-123456', headers=ORIGIN) as ws:
             ws.receive_json()
             ws.send_json(start_command(laptop, interview={'company': 'Sample', 'research': 'Supplied annual report'}))

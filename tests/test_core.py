@@ -127,7 +127,7 @@ def test_timeout_and_fatal():
         await session.start(0,1,'short', options=live_options())
         session.fatal('Network dropped')
         await asyncio.sleep(.02)
-        assert session.state=='idle' and session.reason=='Network dropped'
+        assert session.state=='idle' and session.reason.startswith('Network dropped')
     asyncio.run(check())
 
 def test_failed_second_connection_cleans_both():
