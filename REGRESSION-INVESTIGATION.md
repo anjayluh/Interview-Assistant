@@ -94,3 +94,33 @@ Commands: `.venv/bin/python -m pytest -q`, `node tests/test_phone_render.js`, Ja
 No real Groq/AssemblyAI requests or paid tests were made. No physical iPhone or real Micro1 interview was run for this correction. Restoration of the reported November 1–3 outcome is therefore not yet live-verified. Restart the Mac backend and re-pair/reload the phone to load the correction. If a subsequent authorised free session fails, its exact safe classification should now be available in the diagnostics panel and last-error file rather than the generic message.
 
 Sources: [Groq API errors](https://console.groq.com/docs/errors), [rate limits](https://console.groq.com/docs/rate-limits), [service-tier defaults](https://console.groq.com/docs/service-tiers). Local SDK signature/source and offline transport reproduction provide the evidence for the TypeError.
+
+
+## 2026-11-19: Mid-session JSON validation failure
+
+The saved owner-only diagnostic identified `APIError`, no HTTP status, and provider code
+`json_validate_failed` with `json_object` streaming on `openai/gpt-oss-20b`. An offline
+HTTP/SSE reproduction through the installed Groq SDK produces the same classification.
+The previous application-error message was misleading: this was a provider output-validation
+failure, and the session handler incorrectly disabled all remaining suggestions.
+
+GPT-OSS now uses the existing strict JSON schema without streaming, including when the
+session supplies a draft callback. Answers appear complete after validation; the earlier
+streamed-draft behaviour described above applies only to the generic non-strict adapter.
+The model, provider, token caps, request timeout, zero SDK retries, free-only policy and
+session deadlines are unchanged. Strict outputs do not support streaming according to
+[Groq documentation](https://console.groq.com/docs/structured-outputs).
+
+A JSON/output-validation failure clears only the current draft, records safe diagnostics,
+and leaves suggestions available for a later distinct question. It does not retry the failed
+question, replay it on reconnect, issue a repair request, or change provider/model. Other
+application/network failures retain their existing pause behaviour. Access, billing and
+rate/quota rejections retain the existing shutdown controls. STOP ALL and deadline cleanup
+still cancel pending work and close both audio streams.
+
+Tests use offline transports and mocked audio/STT only. Simulated clocks exercise 15-, 60-,
+and 120-minute configured deadlines, inject a failed answer at minute seven, then verify
+later answers and deadline shutdown. This is not a real-duration soak test or physical
+iPhone verification. External provider quotas, network outages, access restrictions and
+response limits can still interrupt service; the configured duration cannot guarantee
+provider availability or free allowance for the entire interview.

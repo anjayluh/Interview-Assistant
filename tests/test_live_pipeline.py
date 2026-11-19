@@ -44,8 +44,8 @@ class MockStream:
 def streaming_answers(stream):
     create = AsyncMock(return_value=stream)
     client = NS(chat=NS(completions=NS(create=create)), close=AsyncMock(),
-                models=NS(list=AsyncMock(return_value=NS(data=[NS(id='openai/gpt-oss-20b')]))))
-    return Answers(Settings(groq_key='mock'), client), create
+                models=NS(list=AsyncMock(return_value=NS(data=[NS(id='test-stream-model')]))))
+    return Answers(Settings(groq_key='mock', model='test-stream-model'), client), create
 
 
 def test_real_stream_roles_partials_context_and_separate_answer_events():
@@ -74,7 +74,7 @@ def test_real_stream_roles_partials_context_and_separate_answer_events():
         assert any(x['speaker'] == 'me' for x in context['conversation'])
         assert 'professional_context' in context
         assert args['stream'] and args['response_format'] == {'type': 'json_object'}
-        assert args['model'] == 'openai/gpt-oss-20b'
+        assert args['model'] == 'test-stream-model'
         assert 'Strengthen every response' in args['messages'][0]['content']
         assert request.await_count == 1
         assert any(e['type'] == 'answer_delta' for e in events)
@@ -168,7 +168,7 @@ def test_stream_errors_clear_draft_close_stream_and_never_retry(failure):
         await session.answer_task
         if session.fatal_task: await session.fatal_task
         if failure == 'invalid':
-            assert session.state == 'running' and not session.answer_enabled
+            assert session.state == 'running' and session.answer_enabled
             await session.stop()
         assert stream.closed and request.await_count == 1
         assert session.state == 'idle' and session.draft is None and not session.suggestions

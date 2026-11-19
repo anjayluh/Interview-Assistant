@@ -193,11 +193,11 @@ class Answers:
         if model in ('openai/gpt-oss-20b', 'openai/gpt-oss-120b'):
             format_options = {'type': 'json_schema', 'json_schema': {
                 'name': 'interview_answer', 'strict': True, 'schema': SCHEMA}}
-        if on_text:
-            format_options = {'type': 'json_object'}
+        # Strict schema output is supported by GPT-OSS only without streaming.
+        streaming = bool(on_text) and format_options['type'] != 'json_schema'
         rules = (RULES + f'\nTarget roughly {words} spoken words. '
                  f'Categories: {", ".join(CATEGORIES)}. Experience labels: {", ".join(EXPERIENCE)}.')
-        if on_text:
+        if streaming:
             rules += '\nEmit text as the FIRST JSON field, then all supporting fields. JSON schema: ' + json.dumps(SCHEMA)
         messages = [{'role': 'system', 'content': rules}, {'role': 'user', 'content': context}]
         # Bound request size using UTF-8 bytes plus framing/schema overhead.
@@ -207,7 +207,7 @@ class Answers:
         self.last_request = {
             'operation': 'answer_generation', 'method': 'POST',
             'endpoint': 'https://api.groq.com/openai/v1/chat/completions', 'model': model,
-            'response_format': format_options['type'], 'stream': bool(on_text),
+            'response_format': format_options['type'], 'stream': streaming,
             'max_completion_tokens': tokens, 'temperature': .4, 'service_tier': 'on_demand',
             'reasoning_effort': 'low' if gpt_oss else None, 'timeout_seconds': 25,
             'prompt_utf8_bytes': len(json.dumps(messages, ensure_ascii=False).encode('utf-8')),
@@ -218,9 +218,9 @@ class Answers:
                 model=model, messages=messages,
                 response_format=format_options, max_completion_tokens=tokens, temperature=0.4,
                 service_tier='on_demand',
-                **({'stream': True} if on_text else {}),
+                **({'stream': True} if streaming else {}),
                 **({'reasoning_effort': 'low'} if gpt_oss else {}))
-            if on_text:
+            if streaming:
                 stream = reply
                 content, usage, first, last_emit, last_text = '', None, True, 0, ''
                 try:

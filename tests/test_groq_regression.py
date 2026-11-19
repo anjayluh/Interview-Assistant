@@ -32,7 +32,7 @@ def test_installed_sdk_accepts_actual_stream_request_without_unsupported_options
             body = json.loads(request.content)
             assert request.url.path == '/openai/v1/chat/completions'
             assert 'stream_options' not in body
-            assert body['model'] == 'openai/gpt-oss-20b' and body['stream'] is True
+            assert body['model'] == 'test-stream-model' and body['stream'] is True
             pieces = [content[:30], content[30:]]
             events = []
             for piece in pieces:
@@ -43,7 +43,7 @@ def test_installed_sdk_accepts_actual_stream_request_without_unsupported_options
             return httpx.Response(200, headers={'content-type':'text/event-stream'}, text=''.join(events))
         http = httpx.AsyncClient(transport=httpx.MockTransport(respond))
         client = AsyncGroq(api_key='offline-placeholder', http_client=http, max_retries=0)
-        service = Answers(Settings(), client); service.verified = True
+        service = Answers(Settings(model='test-stream-model'), client); service.verified = True
         text = []
         result = await service.generate(context(), 'short', on_text=text.append)
         assert result['text'] == payload()['text'] and text
@@ -145,4 +145,82 @@ def test_failed_answers_do_not_retry_on_later_interviewer_questions():
         with pytest.raises(ValueError,match='paused'):
             session.request_answer('Manual retry is blocked until a new authorised session')
         await session.stop()
+    asyncio.run(check())
+
+
+def test_actual_sdk_stream_json_validation_error_is_not_an_application_bug():
+    async def check():
+        count = 0
+        def respond(request):
+            nonlocal count
+            count += 1
+            event = {'error': {'message': 'PRIVATE generated content', 'code': 'json_validate_failed', 'type': 'invalid_request_error'}}
+            return httpx.Response(200, headers={'content-type': 'text/event-stream'},
+                                  text='data: ' + json.dumps(event) + '\n\n')
+        client = AsyncGroq(api_key='mock', http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)), max_retries=0)
+        service = Answers(Settings(model='test-stream-model'), client); service.verified = True
+        with pytest.raises(ProviderFailure) as caught:
+            await service.generate(context(), 'medium', on_text=lambda x: None)
+        assert caught.value.diagnostic['category'] == 'invalid_response'
+        assert caught.value.diagnostic['provider_error_code'] == 'json_validate_failed'
+        assert caught.value.diagnostic['exception_type'] == 'APIError'
+        assert caught.value.diagnostic['http_status'] is None
+        assert 'PRIVATE' not in json.dumps(caught.value.diagnostic)
+        assert count == 1
+        await service.close()
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize('minutes', [15, 60, 120])
+def test_strict_gpt_oss_recovers_on_next_question_and_keeps_configured_deadline(minutes):
+    async def check():
+        session, events, _ = make_session()
+        requests = []
+        def respond(request):
+            if request.method == 'GET':
+                return httpx.Response(200, json={'data': [{'id': 'openai/gpt-oss-20b'}]})
+            body = json.loads(request.content)
+            requests.append(body)
+            assert not body.get('stream', False)
+            assert body['response_format']['type'] == 'json_schema'
+            assert body['response_format']['json_schema']['strict'] is True
+            assert body['model'] == 'openai/gpt-oss-20b'
+            assert body['service_tier'] == 'on_demand'
+            if len(requests) == 2:
+                return httpx.Response(400, json={'error': {'code': 'json_validate_failed', 'type': 'invalid_request_error', 'message': 'PRIVATE'}})
+            return httpx.Response(200, json={'id':'offline', 'object':'chat.completion', 'created':1,
+                'model':body['model'], 'choices':[{'index':0,'message':{'role':'assistant','content':json.dumps(payload())},'finish_reason':'stop'}]})
+        sdk = AsyncGroq(api_key='mock', http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)), max_retries=0)
+        session.answers = Answers(Settings(model='openai/gpt-oss-20b'), sdk)
+        options = live_options(); options.minutes = minutes
+        await session.start(0, 1, 'medium', options=options)
+        deadline = session.deadline
+        loop = asyncio.get_running_loop(); clock = loop.time; advance = 0
+        loop.time = lambda: clock() + advance
+        try:
+            for number, minute in enumerate([1, 7, 8, minutes - 1], 1):
+                advance = minute * 60
+                session.request_answer('Explain caching strategy ' + str(number))
+                await session.answer_task
+                assert session.state == 'running' and session.answer_enabled
+                assert session.deadline == deadline and session.limit_minutes == minutes
+                assert session.snapshot()['maximum_payment_ugx'] == 0
+                if number == 2:
+                    assert session.answer_status['phase'] == 'failed'
+                    assert session.answer_status['diagnostic']['category'] == 'invalid_response'
+                else:
+                    assert session.answer_status['phase'] == 'ready'
+            assert len(requests) == 4  # One request per distinct question; no retry of failed question.
+            assert len(session.suggestions) == 3
+            assert not session.draft
+            resources = [*session.captures.values(), *session.transcribers.values()]
+            advance = minutes * 60 + 1
+            for _ in range(40):
+                if session.state == 'idle': break
+                await asyncio.sleep(.01)
+            assert session.state == 'idle'
+            assert all(x.closed for x in resources)
+        finally:
+            loop.time = clock
+            await session.stop()
     asyncio.run(check())

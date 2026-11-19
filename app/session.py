@@ -383,6 +383,11 @@ class Session:
                     self.fatal('Maximum session duration reached.')
                     return
                 failure = groq_failure(exc, getattr(self.answers, 'last_request', {}))
+                if failure.diagnostic['category'] == 'invalid_response' and failure.diagnostic['http_status'] not in (401, 402, 403, 429):
+                    failure = ProviderFailure(str(failure) + ' Suggestions remain available for the next question.', failure.diagnostic)
+                    await self.record_answer_failure(failure, pause=False)
+                    self.emit(self.snapshot())
+                    continue
                 await self.record_answer_failure(failure)
                 # Preserve strict access/billing/rate-limit shutdown. Other generation
                 # failures can pause Groq while independent transcription continues.
@@ -394,9 +399,9 @@ class Session:
                     await self.answers.close()
                 return
 
-    async def record_answer_failure(self, failure):
-        self.answer_enabled = False
-        self.pending_questions.clear()
+    async def record_answer_failure(self, failure, pause=True):
+        self.answer_enabled = not pause
+        if pause: self.pending_questions.clear()
         self.draft = None
         self.answer_status = {'phase': 'failed', 'message': str(failure), 'diagnostic': failure.diagnostic}
         self.emit({'type': 'groq', 'status': 'error', 'message': str(failure), 'diagnostic': failure.diagnostic})

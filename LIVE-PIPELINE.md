@@ -70,3 +70,33 @@ Physical-device verification remains outstanding: test Safari on an actual paire
 ## SDK regression correction
 
 See [REGRESSION-INVESTIGATION.md](REGRESSION-INVESTIGATION.md). The installed SDK rejected the streaming change's `stream_options` keyword before HTTP dispatch; it has been removed. New tests use the installed SDK with an offline HTTP transport. Phone generation/failure status now survives cleanup and reconnect. Safe failure details are retained without recording interview content. Earlier same-Mac streaming measurements used permissive SDK stubs and did not prove SDK wire compatibility.
+
+
+## 2026-11-19: Mid-session JSON validation failure
+
+The saved owner-only diagnostic identified `APIError`, no HTTP status, and provider code
+`json_validate_failed` with `json_object` streaming on `openai/gpt-oss-20b`. An offline
+HTTP/SSE reproduction through the installed Groq SDK produces the same classification.
+The previous application-error message was misleading: this was a provider output-validation
+failure, and the session handler incorrectly disabled all remaining suggestions.
+
+GPT-OSS now uses the existing strict JSON schema without streaming, including when the
+session supplies a draft callback. Answers appear complete after validation; the earlier
+streamed-draft behaviour described above applies only to the generic non-strict adapter.
+The model, provider, token caps, request timeout, zero SDK retries, free-only policy and
+session deadlines are unchanged. Strict outputs do not support streaming according to
+[Groq documentation](https://console.groq.com/docs/structured-outputs).
+
+A JSON/output-validation failure clears only the current draft, records safe diagnostics,
+and leaves suggestions available for a later distinct question. It does not retry the failed
+question, replay it on reconnect, issue a repair request, or change provider/model. Other
+application/network failures retain their existing pause behaviour. Access, billing and
+rate/quota rejections retain the existing shutdown controls. STOP ALL and deadline cleanup
+still cancel pending work and close both audio streams.
+
+Tests use offline transports and mocked audio/STT only. Simulated clocks exercise 15-, 60-,
+and 120-minute configured deadlines, inject a failed answer at minute seven, then verify
+later answers and deadline shutdown. This is not a real-duration soak test or physical
+iPhone verification. External provider quotas, network outages, access restrictions and
+response limits can still interrupt service; the configured duration cannot guarantee
+provider availability or free allowance for the entire interview.

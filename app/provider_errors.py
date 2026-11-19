@@ -70,6 +70,10 @@ def groq_failure(exc, metadata=None):
                 value = error.get(key)
                 if isinstance(value, str) and value in CODES: diagnostic['provider_error_' + key] = value
             if isinstance(error.get('param'), str) and error['param'] in PARAMS: diagnostic['invalid_parameter'] = error['param']
+    if diagnostic.get('provider_error_code') == 'json_validate_failed' and status not in (401, 402, 403, 429):
+        category = 'invalid_response'
+        message = 'Groq could not produce a valid JSON answer for this question. No retry was made.'
+        diagnostic['category'] = category
     request_id = getattr(exc, 'request_id', None)
     if request_id is None:
         request_id = getattr(getattr(exc, 'response', None), 'headers', {}).get('x-request-id')
