@@ -1,15 +1,10 @@
 'use strict';
 const $ = id => document.getElementById(id);
-let socket, retry = 0, timer, elapsed = 0, usage = 0, rate = .15, running = false, connected = false;
+let socket, retry = 0, timer, elapsed = 0, usage = 0, running = false, connected = false;
 let currentState = 'idle';
 let quoteData, quoteTimer, quoteRequest = 0, heartbeat;
 let keysReady = false;
-const safetyFields = ['live-minutes', 'live-cap', 'live-answers', 'live-fx', 'live-fx-date', 'live-fx-source',
-  'live-assembly-check', 'live-groq-check', 'keyterms', 'free-assembly-plan', 'free-assembly-usd',
-  'free-assembly-rate', 'free-assembly-keyterms', 'free-assembly-source', 'free-assembly-protected',
-  'free-groq-plan', 'free-groq-tokens', 'free-groq-requests', 'free-groq-source', 'free-groq-protected',
-  'free-valid-until', 'free-exclusive', 'free-confirm-now'];
-let balancesCheckedAt = null;
+const safetyFields = ['live-minutes', 'live-cap', 'keyterms'];
 let interviewRan = false;
 const client = sessionStorage.iaClient || (sessionStorage.iaClient = crypto.randomUUID());
 const rows = new Map();
@@ -78,7 +73,7 @@ function buttons() {
   else if ($('mic').value === $('system').value) reasons.push('Select different microphone and system audio inputs.');
   if (!quoteData?.quote_id) {
     reasons.push(...(quoteData?.blockers?.length ? quoteData.blockers
-      : ['Review Live session safety to obtain a current cost estimate and complete the billing checks.']));
+      : ['Check the local session settings under Live session safety.']));
   }
   $('start').disabled = reasons.length > 0;
   $('start-blocker').textContent = idle ? reasons.join(' ') : reasons[0];
@@ -94,7 +89,7 @@ function buttons() {
 }
 function clock() {
   $('duration').textContent = `${Math.floor(elapsed / 60).toString().padStart(2,'0')}:${Math.floor(elapsed % 60).toString().padStart(2,'0')}`;
-  $('cost').textContent = `Estimated AssemblyAI usage: $${(usage / 3600 * rate).toFixed(4)} · ${(usage/60).toFixed(1)} channel-min`;
+  $('cost').textContent = `AssemblyAI usage: ${(usage/60).toFixed(1)} channel-min · maximum user expenditure UGX 0`;
 }
 function idleMode(mode) { return mode === 'idle' || mode === 'testing'; }
 function state(s) {
@@ -105,22 +100,14 @@ function state(s) {
   if (currentState === 'idle' && interviewRan) {
     interviewRan = false;
     document.dispatchEvent(new Event('interview-ended'));
-    $('live-assembly-check').checked = $('live-groq-check').checked = $('free-confirm-now').checked = false;
-    balancesCheckedAt = null;
     refreshQuote();
   }
   keysReady = Boolean(s.configured.assemblyai && s.configured.groq);
   $('live-mode').textContent = idleMode(s.state) ? 'LOCAL-ONLY' : 'FREE USAGE ONLY';
   $('live-minutes').max = s.max_minutes;
-  rate = s.rate_usd || 0;
-  $('free-session-usage').hidden = !s.free_usage;
-  $('free-session-usage').textContent = s.free_usage
-    ? 'Free session answer budget remaining: ' + s.free_usage.remaining_answers
-      + '. Expected user payment UGX 0. Remaining token and request reservations are local estimates.'
-    : '';
   clearInterval(timer);
   if (running) timer = setInterval(() => { elapsed++; usage += s.active_channels; clock(); }, 1000);
-  $('notice').textContent = s.reason + (s.free_usage ? ' · ' + s.free_usage.remaining_answers + ' reserved free answers remaining · expected payment UGX 0' : '');
+  $('notice').textContent = s.reason;
   $('length').value = s.length;
   $('limit').textContent = `Session limit: ${idleMode(s.state) ? $('live-minutes').value : s.limit_minutes} min`;
   $('assembly').textContent = `AssemblyAI: ${s.configured.assemblyai ? (running ? '2 streams connected' : s.state === 'starting' ? 'connecting…' : 'disconnected') : 'key missing'}`;
@@ -211,56 +198,12 @@ async function refresh() {
   } catch { error('Unable to list devices. Check the backend and reload.'); }
 }
 function liveOptions() {
-  const number = id => $(id).value === '' ? null : $(id).valueAsNumber;
-  const until = $('free-valid-until').value;
-  return {
-    minutes: $('live-minutes').valueAsNumber, cap_ugx: 0,
-    max_answers: $('live-answers').valueAsNumber,
-    fx_ugx_per_usd: $('live-fx').value || null, fx_date: $('live-fx-date').value || null,
-    fx_source: $('live-fx-source').value,
-    assembly_billing_checked: $('live-assembly-check').checked,
-    groq_billing_checked: $('live-groq-check').checked,
-    free: {
-      assembly_credits_usd: $('free-assembly-usd').value || null,
-      assembly_hourly_usd: $('free-assembly-rate').value || null,
-      assembly_keyterms_usd: $('free-assembly-keyterms').value || null,
-      assembly_plan: $('free-assembly-plan').value,
-      assembly_no_paid_fallback: $('free-assembly-protected').checked,
-      assembly_source: $('free-assembly-source').value,
-      groq_plan: $('free-groq-plan').value,
-      groq_remaining_requests: number('free-groq-requests'),
-      groq_remaining_tokens: number('free-groq-tokens'),
-      groq_no_paid_fallback: $('free-groq-protected').checked,
-      groq_source: $('free-groq-source').value,
-      checked_at: $('free-confirm-now').checked ? balancesCheckedAt : null,
-      valid_until: until ? new Date(until).toISOString() : null,
-      exclusive_balances: $('free-exclusive').checked,
-    },
-  };
+  return {minutes: $('live-minutes').valueAsNumber, cap_ugx: 0};
 }
 function showQuote(data) {
   quoteData = data;
-  const covered = data?.expected_payment_ugx === 0;
-  const details = data ? [
-    'AssemblyAI gross usage USD ' + (data.total_usd ?? 'unknown')
-      + '; free-credit reserve USD ' + (data.assembly_reserved_usd ?? 'unknown')
-      + '; confirmed available USD ' + (data.assembly_available_usd ?? 'unknown') + '.',
-    'Groq gross usage estimate USD ' + (data.groq_gross_usd ?? 'unknown')
-      + '; reserve ' + data.groq_reserved_tokens + ' tokens and ' + data.groq_reserved_requests
-      + ' requests for up to ' + data.max_answers + ' answers. Confirmed available: '
-      + (data.groq_available_tokens ?? 'unknown') + ' tokens, ' + (data.groq_available_requests ?? 'unknown') + ' requests.',
-    ...(data.gross_transcription_ugx_reference == null ? [] : [
-      'Optional gross transcription reference UGX ' + data.gross_transcription_ugx_reference
-        + '; the free-only expected payment is assessed separately.']),
-    covered ? 'Expected user payment UGX 0. Both free allowances cover the reserved session.'
-      : 'Expected payment cannot be confirmed as UGX 0. Live session blocked.',
-  ] : ['Free allowance details incomplete — live session blocked.'];
-  $('live-quote').textContent = details.join(' ');
-  $('live-quote').classList.toggle('safety-warning', !covered);
-  $('live-price-date').textContent = data ? '· checked ' + data.pricing_date + ' · USD prices; AssemblyAI rate supplied by you' : '';
-  $('live-billing').textContent = data?.account_verification
-    || 'Free balances and zero-billing protection have not been confirmed for both providers.';
-  const reasons = data?.blockers || ['Confirm each provider’s free balance and zero-billing protection.'];
+  $('live-quote').textContent = data?.allowance_status || 'Unable to check local session settings.';
+  const reasons = data?.blockers || ['Check that the session duration is valid and the local backend is running.'];
   $('live-blockers').replaceChildren(...reasons.map(reason => {
     const item = document.createElement('li');
     item.textContent = reason;
@@ -288,12 +231,6 @@ async function refreshQuote() {
 }
 for (const id of safetyFields) {
   $(id).addEventListener('input', () => {
-    if (id === 'free-confirm-now') {
-      balancesCheckedAt = $(id).checked ? new Date().toISOString() : null;
-    } else if (!['live-fx', 'live-fx-date', 'live-fx-source'].includes(id)) {
-      $('free-confirm-now').checked = false;
-      balancesCheckedAt = null;
-    }
     ++quoteRequest;
     showQuote(null);
     clearTimeout(quoteTimer);
@@ -308,16 +245,12 @@ $('start').onclick = async () => {
   const consentKeyterms = $('keyterms').checked;
   const consentFingerprint = JSON.stringify({live: consentOptions, keyterms: consentKeyterms});
   if (!window.confirm(
-    'Start this ' + data.minutes + '-minute FREE USAGE ONLY session? '
-    + 'Expected user payment UGX 0, based on the balances and non-billable account protections you confirmed. '
-    + 'AssemblyAI reserves USD ' + data.assembly_reserved_usd + ' of free credit for both audio streams. '
-    + 'Groq reserves ' + data.groq_reserved_tokens + ' free tokens and '
-    + data.groq_reserved_requests + ' requests for at most ' + data.max_answers + ' answers. '
-    + 'Provider billing state is controlled by the providers. Do not change the confirmed account settings during this session.'
+    'Start a ' + data.minutes + '-minute live session using AssemblyAI trial credits and Groq Free capacity? '
+    + 'Maximum user expenditure is UGX 0. The session stops if a provider rejects access or reports exhausted credits or a rate limit.'
   )) return;
   if (consentFingerprint !== JSON.stringify({live: liveOptions(), keyterms: $('keyterms').checked})) {
     showQuote(null);
-    return error('Free allowance settings changed. Review the estimate again.');
+    return error('Session settings changed. Review them again.');
   }
   hideAudioDiagnostics();
   command({cmd: 'start', mic: Number($('mic').value), system: Number($('system').value),

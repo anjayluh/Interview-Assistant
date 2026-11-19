@@ -25,6 +25,7 @@ class Transcriber:
         self.on_error = on_error
         self.ready = asyncio.Event()
         self.failed = False
+        self.failure_message = 'AssemblyAI connection failed. Check access and connectivity.'
         self.closing = False
         self.use_keyterms = False
         self.client.on(StreamingEvents.Begin, self._begin)
@@ -44,11 +45,14 @@ class Transcriber:
         self.ready.set()
         if not self.closing:
             code = getattr(event, 'code', None)
-            message = str(getattr(event, 'message', '')).lower()
+            message = str(getattr(event, 'message', getattr(event, 'error', ''))).lower()
             if code in (402, 429) or any(word in message for word in ('balance', 'credit', 'quota', 'billing')):
-                self.on_error('AssemblyAI free allowance exhausted or billing access rejected. Session stopped; paid fallback is blocked.')
+                self.failure_message = 'AssemblyAI free allowance exhausted or provider rate limit reached. Live session stopped.'
+            elif code in (401, 403):
+                self.failure_message = 'AssemblyAI rejected the API key or account access. Live session stopped.'
             else:
-                self.on_error('AssemblyAI connection failed. Free-only session stopped. Check access and connectivity before reconfirming balances.')
+                self.failure_message = 'AssemblyAI connection failed. Check access and connectivity before starting again.'
+            self.on_error(self.failure_message)
 
     def _terminated(self, client, event):
         if not self.closing:
@@ -61,7 +65,7 @@ class Transcriber:
             inactivity_timeout=60, customer_support_audio_capture=False, keyterms_prompt=KEYTERMS if self.use_keyterms else None))
         await asyncio.wait_for(self.ready.wait(), 12)
         if self.failed:
-            raise RuntimeError('AssemblyAI could not start. Check credentials, account credits and connectivity.')
+            raise ValueError(self.failure_message)
         if not isinstance(getattr(self.client, '_write_queue', None), asyncio.Queue):
             raise RuntimeError('AssemblyAI SDK queue changed; use the pinned requirements.')
 

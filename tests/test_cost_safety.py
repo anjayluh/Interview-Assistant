@@ -1,5 +1,4 @@
 import asyncio
-from datetime import timedelta
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -7,7 +6,7 @@ from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app.config import Settings
-from app.cost import LiveOptions, PRICING_DATE, Quote
+from app.cost import LiveOptions, Quote
 from app.main import create_app
 from app.profile import SEED, ProfileStore
 from app.transcription import Transcriber
@@ -18,42 +17,19 @@ from tests.test_profile import docx, pdf
 WS = '/ws?client=safety-tests-12345678'
 
 
-def test_offline_pricing_and_zero_cap():
-    from decimal import Decimal
+def test_free_session_defaults_and_limits():
     assert LiveOptions().minutes == 5
     assert LiveOptions().cap_ugx == 0
-    free = Quote(live_options(), False, 120, PRICING_DATE)
-    assert free.public()['total_ugx'] == 0
-    assert free.public()['total_usd'] == '0.025000'
-    assert free.public()['hourly_usd'] == '0.300000'
-    assert free.assembly_reserve == Decimal('0.034375')
+    free = Quote(live_options(), 120)
+    assert free.public()['maximum_payment_ugx'] == 0
+    assert free.public()['blockers'] == []
     free.require_authorisation()
-    with_keyterms = Quote(live_options(), True, 120, PRICING_DATE)
-    assert with_keyterms.public()['hourly_usd'] == '0.380000'
-    with_keyterms.require_authorisation()
     with pytest.raises(ValueError, match='configured maximum'):
-        Quote(live_options(minutes=6), False, 5, PRICING_DATE).require_authorisation()
-
-
-@pytest.mark.parametrize('options,today', [
-    (live_options(free={'assembly_hourly_usd': None}), PRICING_DATE),
-    (live_options(free={'assembly_source': ''}), PRICING_DATE),
-    (live_options(free={'checked_at': None}), PRICING_DATE),
-    (live_options(free={'valid_until': None}), PRICING_DATE),
-    (live_options(), PRICING_DATE + timedelta(days=31)),
-])
-def test_unknown_or_stale_prices_fail_closed(options, today):
-    quote = Quote(options, False, 120, today)
-    assert quote.public()['total_ugx'] is None
-    with pytest.raises(ValueError):
-        quote.require_authorisation()
+        Quote(live_options(minutes=6), 5).require_authorisation()
 
 
 @pytest.mark.parametrize('options, message', [
     (live_options(confirmed=False), 'Explicit authorisation'),
-    (live_options(assembly_billing_checked=False), 'not confirmed for AssemblyAI'),
-    (live_options(groq_billing_checked=False), 'not confirmed for Groq'),
-    (live_options(free={'assembly_credits_usd': '0'}), 'free allowance exhausted'),
     (live_options(cap_ugx=1), 'UGX 0'),
 ])
 def test_blockers_precede_every_capture_and_provider_call(options, message):
@@ -136,7 +112,7 @@ def test_single_use_quote_and_stop_all_cancels_generation():
             start = start_command(client)
             tampered = {**start, 'live': {**start['live'], 'minutes': 6}}
             ws.send_json(tampered)
-            assert 'fresh estimate' in ws.receive_json()['message']
+            assert 'current session settings' in ws.receive_json()['message']
             assert ws.receive_json()['state'] == 'idle'
             ws.send_json(start)
             receive_running(ws)
@@ -154,7 +130,7 @@ def test_single_use_quote_and_stop_all_cancels_generation():
             for _ in range(20):
                 event = ws.receive_json()
                 if event['type'] == 'error':
-                    assert 'fresh estimate' in event['message']
+                    assert 'current session settings' in event['message']
                     break
             else:
                 pytest.fail('Replayed quote was not rejected')
@@ -211,7 +187,7 @@ def test_failed_assemblyai_handshake_attempted_once(monkeypatch):
         monkeypatch.setattr(module, 'websocket_connect_async', socket)
         errors = []
         transcriber = Transcriber('mock-key', lambda event: None, errors.append)
-        with pytest.raises(RuntimeError, match='could not start'):
+        with pytest.raises(ValueError, match='connection failed'):
             await transcriber.connect()
         await transcriber.close()
         assert socket.await_count == 1

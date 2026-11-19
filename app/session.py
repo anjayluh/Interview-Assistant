@@ -7,7 +7,7 @@ from .answers import Answers
 from .questions import QuestionGate, is_question
 from .profile import InterviewContext, terms
 from .transcription import Transcriber
-from .cost import DEFAULT_MINUTES, FreeSessionBudget, LiveOptions, quote
+from .cost import DEFAULT_MINUTES, LiveOptions, quote
 
 class Session:
     def __init__(self, settings, emit, capture_factory=Capture, transcriber_factory=Transcriber, answers=None):
@@ -33,9 +33,7 @@ class Session:
         self.opened_at = {}
         self.length = 'medium'
         self.interview = None
-        self.usage_rate = 0.0
         self.limit_minutes = DEFAULT_MINUTES
-        self.free_budget = None
         self.deadline = None
         self.reason = 'Local-only mode. Live services require authorisation for each session.'
         self.latest = ''
@@ -64,12 +62,11 @@ class Session:
         usage = self.channel_seconds + sum(now - t for t in self.opened_at.values())
         return {'type': 'state', 'state': self.state, 'reason': self.reason,
                 'duration': duration, 'channel_seconds': usage,
-                'estimate': usage / 3600 * self.usage_rate,
                 'audio_diagnostics': list(self.audio_diagnostics),
-                'free_usage': self.free_budget.public() if self.free_budget else None,
+                'maximum_payment_ugx': 0,
                 'active_channels': len(self.opened_at), 'testing': self.testing, 'sources': list(self.captures),
                 'model': self.settings.model, 'max_minutes': self.settings.max_minutes,
-                'limit_minutes': self.limit_minutes, 'rate_usd': self.usage_rate,
+                'limit_minutes': self.limit_minutes,
                 'configured': {'assemblyai': bool(self.settings.assembly_key), 'groq': bool(self.settings.groq_key)},
                 'groq_verified': self.answers.verified, 'length': self.length}
 
@@ -78,7 +75,7 @@ class Session:
             if self.state != 'idle':
                 raise ValueError('Stop the current session or audio test first.')
             interview = interview or InterviewContext()
-            pricing = quote(options or LiveOptions(), interview.setup.keyterms, self.settings.max_minutes, self.settings.model)
+            pricing = quote(options or LiveOptions(), self.settings.max_minutes)
             pricing.require_authorisation()
             if mic == system:
                 raise ValueError('Choose different microphone and system audio devices.')
@@ -93,8 +90,6 @@ class Session:
             self.interview = interview
             self.start_task = asyncio.current_task()
             self.limit_minutes = pricing.options.minutes
-            self.usage_rate = float(pricing.channel_rate)
-            self.free_budget = FreeSessionBudget(pricing)
             self.answers.free_only = True
             self.started = time.monotonic()
             self.deadline = asyncio.get_running_loop().time() + self.limit_minutes * 60
@@ -110,7 +105,6 @@ class Session:
                 for role in self.captures:
                     self.tasks.append(asyncio.create_task(self.pump(role)))
                 self.tasks.append(asyncio.create_task(self.watchdog(self.deadline)))
-                self.tasks.append(asyncio.create_task(self.watch_free_coverage()))
                 self.emit(self.snapshot())
             except TimeoutError:
                 await self._cleanup('Maximum session duration reached during startup.')
@@ -165,17 +159,6 @@ class Session:
     async def watchdog(self, deadline):
         await asyncio.sleep(max(0, deadline - asyncio.get_running_loop().time()))
         await self.stop('Maximum session duration reached.')
-
-    async def watch_free_coverage(self):
-        while self.state == 'running':
-            await asyncio.sleep(1)
-            if not self.free_budget:
-                return
-            now = time.monotonic()
-            estimate = (self.channel_seconds + sum(now - start for start in self.opened_at.values())) / 3600 * self.usage_rate
-            if estimate >= float(self.free_budget.assembly_reserved_usd):
-                await self.stop('AssemblyAI reserved free-credit budget exhausted. Local-only mode.')
-                return
 
     def fatal(self, message):
         if self.state in ('running', 'starting') and (not self.fatal_task or self.fatal_task.done()):
@@ -245,8 +228,6 @@ class Session:
             }, ensure_ascii=False)
             self.emit({'type': 'groq', 'status': 'generating'})
             try:
-                if self.free_budget:
-                    self.free_budget.reserve_answer()
                 async with asyncio.timeout_at(self.deadline):
                     suggestion = await self.answers.generate(context, self.length)
                 item = {'type': 'answer', 'question': question, **suggestion}
@@ -342,7 +323,6 @@ class Session:
         self.final_keys.clear()
         self.gate = QuestionGate()
         self.interview = None
-        self.free_budget = None
         self.deadline = None
         self.started = None
         # Stop local capture and terminate both provider streams concurrently.

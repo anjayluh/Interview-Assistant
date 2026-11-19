@@ -153,10 +153,10 @@ class Answers:
         rules = (RULES + f'\nTarget roughly {words} spoken words. '
                  f'Categories: {", ".join(CATEGORIES)}. Experience labels: {", ".join(EXPERIENCE)}.')
         messages = [{'role': 'system', 'content': rules}, {'role': 'user', 'content': context}]
-        # Budget one token per UTF-8 byte plus framing/schema overhead, without a tokenizer download.
+        # Bound request size using UTF-8 bytes plus framing/schema overhead.
         input_bound = len(json.dumps({'messages': messages, 'schema': SCHEMA}, ensure_ascii=False).encode('utf-8')) + 1024
         if self.free_only and (input_bound > MAX_INPUT_TOKENS or tokens > MAX_OUTPUT_TOKENS):
-            raise ValueError('Groq request exceeds the reserved free-token budget. Shorten the interview context.')
+            raise ValueError('Groq request exceeds the per-request context limit. Shorten the interview context.')
         try:
             reply = await self.get_client().chat.completions.create(
                 model=model, messages=messages,
@@ -165,8 +165,12 @@ class Answers:
                 **({'reasoning_effort': 'low'} if gpt_oss else {}))
         except Exception as exc:
             status = getattr(exc, 'status_code', None)
-            if status in (402, 403):
-                raise ValueError('Groq rejected access or requested billing. Free-only session stopped; paid fallback is blocked.') from None
+            if status == 402:
+                raise ValueError('Groq free allowance exhausted or billing required. Live session stopped.') from None
+            if status == 403:
+                raise ValueError('Groq denied access. Live session stopped; check whether this model is available on your Free plan.') from None
+            if status == 401:
+                raise ValueError('Groq API key was rejected. Live session stopped.') from None
             if status == 429:
                 raise ValueError('Groq free allowance exhausted or rate limited. Session stopped without retry.') from None
             raise
@@ -174,7 +178,7 @@ class Answers:
         if self.free_only and usage is not None:
             total = getattr(usage, 'total_tokens', None)
             if isinstance(total, int) and total > MAX_INPUT_TOKENS + MAX_OUTPUT_TOKENS:
-                raise ValueError('Groq reported usage above the reserved free budget. Session stopped.')
+                raise ValueError('Groq reported usage above the per-request token limit. Session stopped.')
         content = reply.choices[0].message.content if reply.choices else None
         answer = parse_answer(content)
         professional = json.loads(context)['professional_context']

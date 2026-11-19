@@ -1,16 +1,14 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 import json
 from types import SimpleNamespace as NS
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 import pytest
 from starlette.testclient import TestClient
 
 from app.answers import Answers
 from app.config import Settings
-from app.cost import FreeSessionBudget, MAX_INPUT_TOKENS, MAX_OUTPUT_TOKENS, PRICING_DATE, Quote
+from app.cost import LiveOptions, MAX_INPUT_TOKENS, Quote
 from app.main import create_app
 from app.profile import InterviewContext
 from app.transcription import Transcriber
@@ -18,90 +16,82 @@ from tests.live_helpers import ORIGIN, live_options, start_command
 from tests.test_core import FakeAnswers, FakeCapture, FakeTranscriber, make_session
 
 
-def test_free_coverage_admits_nonzero_gross_with_no_exchange_rate_and_zero_payment():
-    quote = Quote(live_options(), True, 120, PRICING_DATE)
+def test_default_free_session_needs_no_manual_billing_or_price_inputs():
+    options = LiveOptions(confirmed=True)
+    assert options.model_dump() == {'minutes': 5, 'cap_ugx': 0, 'confirmed': True}
+    quote = Quote(options, 120)
     quote.require_authorisation()
-    data = quote.public()
-    assert data['total_ugx'] == data['expected_payment_ugx'] == 0
-    assert Decimal(data['total_usd']) > 0 and Decimal(data['groq_gross_usd']) > 0
-    assert Decimal(data['assembly_reserved_usd']) > Decimal(data['total_usd'])
-    assert data['groq_reserved_tokens'] > quote.options.max_answers * (MAX_INPUT_TOKENS + MAX_OUTPUT_TOKENS)
-    assert quote.options.fx_ugx_per_usd is None
+    assert quote.public()['blockers'] == []
+    assert quote.public()['maximum_payment_ugx'] == 0
 
 
-@pytest.mark.parametrize('overrides,reason', [
-    ({'free': {'assembly_credits_usd': '.0001'}}, 'Insufficient free credits for AssemblyAI'),
-    ({'free': {'groq_remaining_tokens': 1}}, 'Insufficient free credits or quota'),
-    ({'free': {'groq_remaining_requests': 1}}, 'Insufficient free credits or quota'),
-    ({'assembly_billing_checked': False}, 'not confirmed for AssemblyAI'),
-    ({'groq_billing_checked': False}, 'not confirmed for Groq'),
-    ({'free': {'assembly_no_paid_fallback': False}}, 'zero-billing protection'),
-    ({'free': {'groq_no_paid_fallback': False}}, 'cannot guarantee zero billable usage'),
-    ({'free': {'assembly_plan': 'billable'}}, 'zero-billing protection'),
-    ({'free': {'groq_plan': 'paid'}}, 'cannot guarantee zero billable usage'),
-    ({'free': {'groq_plan': 'promotional_billable'}}, 'cannot guarantee zero billable usage'),
-    ({'free': {'groq_remaining_tokens': 0}}, 'Groq free allowance exhausted'),
-    ({'free': {'assembly_credits_usd': 0}}, 'AssemblyAI free allowance exhausted'),
-    ({'free': {'checked_at': (datetime.now(timezone.utc)-timedelta(hours=1)).isoformat()}}, 'last 15 minutes'),
-    ({'free': {'exclusive_balances': False}}, 'Reserve these organisation balances'),
-    ({'free': {'valid_until': datetime.now(timezone.utc).isoformat()}}, 'entire session'),
-    ({'cap_ugx': 10}, 'UGX 0'),
-])
-def test_free_only_rejections_before_any_provider_or_capture(overrides, reason):
+def test_removed_fields_from_an_older_tab_cannot_reintroduce_billing_gates():
+    options = LiveOptions(
+        confirmed=True, fx_ugx_per_usd=None, assembly_billing_checked=False,
+        groq_billing_checked=False, free={'checked_at': None, 'assembly_credits_usd': None},
+        max_answers=3,
+    )
+    assert options.model_dump() == live_options().model_dump()
+    Quote(options, 120).require_authorisation()
+
+
+def test_no_arbitrary_answer_reservation_cutoff_during_free_session():
     async def check():
         session, _, answers = make_session()
-        answers.verify = AsyncMock()
-        session.capture_factory = Mock()
-        with pytest.raises(ValueError, match=reason):
-            await session.start(0, 1, 'medium', options=live_options(**overrides))
-        assert session.state == 'idle' and not session.free_budget
-        answers.verify.assert_not_awaited()
-        session.capture_factory.assert_not_called()
-    asyncio.run(check())
-
-
-def test_exhausting_groq_session_allowance_stops_both_streams_and_cancels_pending_answers():
-    async def check():
-        session, _, answers = make_session()
-        await session.start(0, 1, 'medium', options=live_options(max_answers=1))
+        await session.start(0, 1, 'medium', options=live_options())
         resources = list(session.captures.values()) + list(session.transcribers.values())
-        session.request_answer('Explain idempotency')
-        await session.answer_task
-        assert session.snapshot()['free_usage']['expected_payment_ugx'] == 0
-        assert session.snapshot()['free_usage']['remaining_answers'] == 0
-        session.request_answer('Explain retries')
-        await session.answer_task
-        await session.fatal_task
-        assert len(answers.calls) == 1
-        assert session.state == 'idle'
+        for index in range(5):
+            session.request_answer(f'Explain retries, example {index}')
+            await session.answer_task
+        assert len(answers.calls) == 5
+        assert session.state == 'running'
+        assert session.snapshot()['maximum_payment_ugx'] == 0
+        await session.stop()
         assert all(resource.closed for resource in resources)
     asyncio.run(check())
 
 
-@pytest.mark.parametrize('status,message', [(402,'billing'), (403,'billing'), (429,'free allowance exhausted')])
-def test_provider_billing_or_quota_rejection_is_never_retried(status, message):
+@pytest.mark.parametrize('status,message', [
+    (401, 'API key was rejected'), (402, 'free allowance exhausted'),
+    (403, 'denied access'), (429, 'free allowance exhausted or rate limited'),
+])
+def test_groq_errors_stop_both_streams_without_retry(status, message):
     async def check():
         class ProviderFailure(Exception):
             status_code = status
+
         request = AsyncMock(side_effect=ProviderFailure())
-        client = NS(chat=NS(completions=NS(create=request)))
-        answers = Answers(Settings(), client)
-        answers.verified = True
-        context = json.dumps({'professional_context': json.loads(InterviewContext().for_question('Explain retries'))})
-        with pytest.raises(ValueError, match=message):
-            await answers.generate(context, 'medium')
+        client = NS(
+            chat=NS(completions=NS(create=request)),
+            models=NS(list=AsyncMock(return_value=NS(data=[NS(id='openai/gpt-oss-20b')]))),
+            close=AsyncMock(),
+        )
+        session, _, _ = make_session()
+        session.answers = Answers(Settings(), client)
+        await session.start(0, 1, 'medium', options=live_options())
+        resources = list(session.captures.values()) + list(session.transcribers.values())
+        session.request_answer('Explain retries')
+        await session.answer_task
+        await session.fatal_task
         assert request.await_count == 1
+        assert message in session.reason
+        assert session.state == 'idle'
+        assert all(resource.closed for resource in resources)
+        client.close.assert_awaited_once()
     asyncio.run(check())
 
 
-def test_assembly_free_credit_exhaustion_stops_entire_session():
+@pytest.mark.parametrize('code,message', [
+    (402, 'credit balance exhausted'), (429, 'free quota exceeded'),
+])
+def test_assembly_credit_or_quota_error_stops_entire_session(code, message):
     async def check():
         session, _, _ = make_session()
         await session.start(0, 1, 'medium', options=live_options())
         resources = list(session.captures.values()) + list(session.transcribers.values())
-        fake_sdk = Mock()
-        transcriber = Transcriber('mock', lambda event: None, session.fatal, client=fake_sdk)
-        transcriber._error(fake_sdk, NS(code=402, message='Credit balance exhausted'))
+        sdk = NS(on=lambda *args: None)
+        transcriber = Transcriber('mock', lambda event: None, session.fatal, client=sdk)
+        transcriber._error(sdk, NS(code=code, message=message))
         await session.fatal_task
         assert 'free allowance exhausted' in session.reason
         assert all(resource.closed for resource in resources)
@@ -109,21 +99,7 @@ def test_assembly_free_credit_exhaustion_stops_entire_session():
     asyncio.run(check())
 
 
-def test_time_budget_depletion_stops_transcription_even_before_duration_deadline():
-    async def check():
-        session, _, _ = make_session()
-        await session.start(0, 1, 'medium', options=live_options())
-        resources = list(session.captures.values()) + list(session.transcribers.values())
-        session.free_budget.assembly_reserved_usd = Decimal('0')
-        watcher = next(task for task in session.tasks if task.get_coro().__name__ == 'watch_free_coverage')
-        await watcher
-        assert session.state == 'idle'
-        assert 'free-credit budget exhausted' in session.reason
-        assert all(resource.closed for resource in resources)
-    asyncio.run(check())
-
-
-def test_free_quote_no_fx_and_authorised_start_through_normal_websocket():
+def test_default_websocket_start_with_empty_billing_state():
     app = create_app(Settings(assembly_key='mock', groq_key='mock'))
     session = app.state.control.session
     session.answers = FakeAnswers()
@@ -134,59 +110,46 @@ def test_free_quote_no_fx_and_authorised_start_through_normal_websocket():
         with client.websocket_connect('/ws?client=free-session-123456', headers=ORIGIN) as ws:
             ws.receive_json()
             start = start_command(client)
-            assert 'fx_ugx_per_usd' in start['live'] and start['live']['fx_ugx_per_usd'] is None
+            assert start['live'] == {'minutes': 5, 'cap_ugx': 0, 'confirmed': True}
             ws.send_json(start)
             assert ws.receive_json()['type'] == 'clear'
             assert ws.receive_json()['state'] == 'starting'
             snapshot = ws.receive_json()
             assert snapshot['state'] == 'running'
-            assert snapshot['free_usage']['expected_payment_ugx'] == 0
+            assert snapshot['maximum_payment_ugx'] == 0
             assert len(session.transcribers) == 2
             assert client.post('/api/stop-all', headers=ORIGIN).json()['status'] == 'stopped'
             assert session.state == 'idle'
 
 
-def test_request_larger_than_free_reservation_is_blocked_before_network():
+def test_large_requests_still_block_before_network():
     async def check():
         request = AsyncMock()
         service = Answers(Settings(), NS(chat=NS(completions=NS(create=request))))
         service.verified = service.free_only = True
-        with pytest.raises(ValueError, match='reserved free-token budget'):
+        with pytest.raises(ValueError, match='per-request context limit'):
             await service.generate('x' * (MAX_INPUT_TOKENS + 1), 'long')
         request.assert_not_awaited()
     asyncio.run(check())
 
 
-def test_reservations_are_not_refunded_after_failure_or_cancellation():
-    pricing = Quote(live_options(max_answers=1), False, 120, PRICING_DATE)
-    budget = FreeSessionBudget(pricing)
-    before = budget.remaining_tokens
-    budget.reserve_answer()
-    assert budget.remaining_tokens == before - MAX_INPUT_TOKENS - MAX_OUTPUT_TOKENS
-    with pytest.raises(ValueError, match='allowance exhausted'):
-        budget.reserve_answer()
+def test_stream_start_preserves_provider_exhaustion_message():
+    async def check():
+        from assemblyai.streaming.v3 import StreamingEvents
+        class SDK:
+            def __init__(self):
+                self.handlers = {}
+            def on(self, event, handler):
+                self.handlers[event] = handler
+            async def connect(self, params):
+                self.handlers[StreamingEvents.Error](self, NS(code=402, message='Credit balance is negative'))
+            async def disconnect(self, terminate):
+                assert terminate
 
-
-def test_optional_gross_currency_reference_is_separate_and_requires_fresh_source():
-    from datetime import timedelta
-    options = live_options(fx_ugx_per_usd='4000', fx_date=PRICING_DATE, fx_source='Synthetic source')
-    data = Quote(options, False, 120, PRICING_DATE).public()
-    assert data['gross_transcription_ugx_reference'] == 100
-    assert data['expected_payment_ugx'] == 0
-    stale = options.model_copy(update={'fx_date': PRICING_DATE - timedelta(days=8)})
-    data = Quote(stale, False, 120, PRICING_DATE).public()
-    assert data['gross_transcription_ugx_reference'] is None
-    assert data['expected_payment_ugx'] == 0
-
-
-@pytest.mark.parametrize('plan', ['promotional_billable', 'paid'])
-def test_groq_paid_or_promotional_balance_cannot_override_no_charge_gate(plan):
-    pricing = Quote(live_options(free={'groq_plan': plan}), False, 120, PRICING_DATE)
-    with pytest.raises(ValueError, match='cannot guarantee zero billable usage'):
-        pricing.require_authorisation()
-
-
-def test_confirmed_positive_assembly_balance_on_billable_account_is_still_blocked():
-    pricing = Quote(live_options(free={'assembly_plan': 'billable', 'assembly_credits_usd': '100'}), False, 120, PRICING_DATE)
-    with pytest.raises(ValueError, match='zero-billing protection'):
-        pricing.require_authorisation()
+        errors = []
+        transcriber = Transcriber('mock', lambda event: None, errors.append, client=SDK())
+        with pytest.raises(ValueError, match='free allowance exhausted'):
+            await transcriber.connect()
+        await transcriber.close()
+        assert len(errors) == 1
+    asyncio.run(check())

@@ -1,26 +1,10 @@
-from datetime import datetime, timedelta, timezone
 from app.cost import LiveOptions
 
 ORIGIN = {'origin': 'http://testserver'}
 
 
 def live_options(**overrides):
-    now = datetime.now(timezone.utc)
-    free = {
-        'assembly_credits_usd': '50', 'assembly_hourly_usd': '0.15', 'assembly_keyterms_usd': '0.04',
-        'assembly_plan': 'unupgraded_trial', 'assembly_no_paid_fallback': True,
-        'assembly_source': 'Synthetic trial fixture, no paid access',
-        'groq_plan': 'free', 'groq_no_paid_fallback': True,
-        'groq_remaining_requests': 1000, 'groq_remaining_tokens': 2000000,
-        'groq_source': 'Synthetic free-plan fixture', 'checked_at': now.isoformat(),
-        'valid_until': (now + timedelta(days=1)).isoformat(), 'exclusive_balances': True,
-    }
-    free.update(overrides.pop('free', {}))
-    fields = {
-        'cap_ugx': 0, 'assembly_billing_checked': True,
-        'groq_billing_checked': True, 'confirmed': True, 'free': free,
-    }
-    return LiveOptions(**(fields | overrides))
+    return LiveOptions(**({'cap_ugx': 0, 'confirmed': True} | overrides))
 
 
 def start_command(client, *, interview=None, options=None):
