@@ -1,52 +1,29 @@
 function answerCard(x) {
   const card = document.createElement('article'); card.className = 'answer-card';
-  const q = document.createElement('p'); q.className = 'question'; q.textContent = x.question;
+  card.dataset.revision = x.revision ?? '';
   const p = document.createElement('p'); p.className = 'response'; p.textContent = x.text;
-  const meta = document.createElement('p');
-  meta.className = 'answer-meta';
-  meta.textContent = [x.category, x.experience === 'Not applicable' ? '' : x.experience].filter(Boolean).join(' · ');
-  card.append(q, meta, p);
-  if (x.example) {
-    const example = document.createElement('p');
-    example.className = 'answer-example';
-    example.textContent = 'Personal example — ' + x.example;
-    card.append(example);
+  card.append(p);
+  const more = document.createElement('details');
+  const summary = document.createElement('summary'); summary.textContent = 'Evidence, code and deeper explanation'; more.append(summary);
+  for (const [label, text] of [
+    ['Category', x.category], ['Experience', x.experience], ['Verified source example', x.example],
+    ['Talking points', x.talking_points], ['Details', x.details],
+    ['Competency', [x.competency, x.secondary_competencies].filter(Boolean).join(' · ')], ['Likely follow-ups', x.follow_ups],
+  ]) {
+    if (!text) continue;
+    const info = document.createElement('p'); info.textContent = label + ' · ' + text; more.append(info);
   }
-  if (x.talking_points) {
-    const points = document.createElement('p');
-    points.className = 'answer-points';
-    points.textContent = x.talking_points;
-    card.append(points);
+  if (x.code) {
+    const block = document.createElement('pre'), code = document.createElement('code');
+    code.textContent = x.code; block.append(code); more.append(block);
   }
-  if (x.code || x.details || x.follow_ups || x.competency || x.secondary_competencies) {
-    const more = document.createElement('details');
-    const summary = document.createElement('summary');
-    summary.textContent = x.code ? ['Code', x.language].filter(Boolean).join(' · ') : 'Technical detail';
-    more.append(summary);
-    if (x.code) {
-      const block = document.createElement('pre');
-      const code = document.createElement('code');
-      code.textContent = x.code;
-      block.append(code);
-      more.append(block);
-    }
-    if (x.details) {
-      const detail = document.createElement('p');
-      detail.textContent = x.details;
-      more.append(detail);
-    }
-    for (const [label, text] of [
-      ['Competency', [x.competency, x.secondary_competencies].filter(Boolean).join(' · ')],
-      ['Likely follow-ups', x.follow_ups],
-    ]) {
-      if (!text) continue;
-      const info = document.createElement('p');
-      info.textContent = label + ' · ' + text;
-      more.append(info);
-    }
-    card.append(more);
-  }
-  return card;
+  card.append(more); return card;
+}
+
+function renderLatency(metrics) {
+  const target = document.getElementById('live-latency');
+  if (!target) return;
+  target.textContent = metrics.slice(-16).map(x => `${(x.at_ms / 1000).toFixed(3)}s · ${x.role || 'answer'} · ${x.stage.replaceAll('_', ' ')} · revision ${x.revision}`).join('\n');
 }
 
 (() => {
@@ -223,27 +200,115 @@ function answerCard(x) {
     }
     pairingStatus();
   } else {
-    let rendered = '', polling = false;
+    let streaming = false, lastAnswerStatus = {phase: 'idle'};
+    function answerStatus(status) {
+      if (!status) return;
+      lastAnswerStatus = status;
+      if (status.diagnostic) get('provider-error-diagnostic').textContent = JSON.stringify(status.diagnostic, null, 2);
+      else if (status.phase === 'idle') get('provider-error-diagnostic').textContent = '';
+      const label = status.phase === 'failed' ? status.message
+        : status.phase === 'generating' ? (get('phone-draft').hidden ? 'Generating a suggested answer…' : 'Generating · AI draft, not yet fully validated')
+        : status.phase === 'ready' ? 'AI-generated suggested response'
+        : 'Waiting for an interviewer question.';
+      get('phone-answer-status').textContent = label;
+      if (status.phase === 'failed') get('phone-draft').hidden = true;
+    }
+    const transcriptRows = new Map();
+    let latency = [];
+    function sourceTurn(x) {
+      if (!['me', 'interviewer'].includes(x.role)) return;
+      let row = transcriptRows.get(x.key);
+      if (x.duplicate_of) {
+        row?.remove(); transcriptRows.delete(x.key);
+        get('phone-bleed').textContent = 'Likely interviewer speaker bleed was hidden from YOU. Original microphone source is retained in diagnostics.';
+        return;
+      }
+      if (!row) { row = document.createElement('p'); transcriptRows.set(x.key, row); get('phone-' + x.role).append(row); }
+      row.dataset.source = x.source || x.role;
+      row.className = 'utterance ' + x.role + (x.final ? '' : ' partial');
+      row.textContent = x.text;
+      while (transcriptRows.size > 122) {
+        const key = transcriptRows.keys().next().value; transcriptRows.get(key).remove(); transcriptRows.delete(key);
+      }
+    }
+    function clearPhone() {
+      transcriptRows.clear(); get('phone-interviewer').replaceChildren(); get('phone-me').replaceChildren();
+      get('phone-answers').replaceChildren(); get('phone-draft').hidden = true;
+      get('phone-bleed').textContent = ''; get('phone-answer-status').textContent = 'Waiting for an interviewer question.';
+      latency = []; renderLatency(latency);
+      if (lastAnswerStatus.phase === 'failed') answerStatus(lastAnswerStatus);
+    }
+    function handle(x) {
+      if (x.type === 'companion_snapshot') {
+        lastAnswerStatus = x.answer_status || {phase: 'idle'};
+        clearPhone();
+        [...x.history, ...x.partials].forEach(sourceTurn);
+        get('phone-answers').replaceChildren(...x.answers.slice().reverse().map(answerCard));
+        latency = x.metrics || []; renderLatency(latency);
+        if (x.draft) handle(x.draft);
+        if (x.answer_status) answerStatus(x.answer_status);
+        get('phone-status').textContent = x.state === 'running' ? 'Connected · Live session controlled on the Mac' : 'Connected · Local practice';
+      } else if (x.type === 'transcript') sourceTurn(x);
+      else if (x.type === 'groq') answerStatus({phase: x.status === 'error' ? 'failed' : x.status, message: x.message, diagnostic: x.diagnostic});
+      else if (x.type === 'latency') { latency.push(x); latency = latency.slice(-80); renderLatency(latency); }
+      else if (x.type === 'answer_delta') {
+        get('phone-draft').hidden = false; get('phone-draft').textContent = x.text;
+        get('phone-answer-status').textContent = 'AI draft · still generating and awaiting complete response validation';
+      } else if (x.type === 'answer') {
+        get('phone-draft').hidden = true; get('phone-answers').prepend(answerCard(x));
+        while (get('phone-answers').children.length > 12) get('phone-answers').lastChild.remove();
+        get('phone-answer-status').textContent = 'AI-generated suggested response';
+      } else if (x.type === 'answer_superseded') {
+        get('phone-draft').hidden = true;
+        get('phone-answers').replaceChildren();
+        get('phone-answer-status').textContent = 'Preparing an answer to the latest interviewer question and instructions…';
+      } else if (x.type === 'state') {
+        get('phone-status').textContent = x.state === 'running' ? (x.answer_enabled === false ? 'Connected · Transcription active, suggestions paused' : 'Connected · Live session controlled on the Mac') : 'Connected · ' + x.reason;
+        if (x.answer_status) answerStatus(x.answer_status);
+      }
+      else if (x.type === 'clear') clearPhone();
+      else if (x.type === 'error') { get('phone-draft').hidden = true; get('phone-answer-status').textContent = x.message; }
+      else if (x.type === 'revoked') { const error = new Error('Phone access was revoked or expired. Pair again on the Mac.'); error.status = 403; throw error; }
+    }
     async function refresh() {
-      if (!options.headers.Authorization || polling) return;
-      polling = true;
+      if (!options.headers.Authorization || streaming) return;
+      streaming = true;
+      let reader;
       try {
-        const state = await api('companion/state');
+        const started = performance.now();
+        const response = await fetch('/api/companion/events', {headers: options.headers});
+        if (!response.ok) { const detail = await response.json().catch(() => ({})); const error = new Error(detail.detail || 'Phone connection refused. Pair again on the Mac.'); error.status = response.status; throw error; }
         get('phone-pairing').hidden = true;
-        get('phone-status').textContent = state.state === 'running' ? 'Connected · Live session controlled on the Mac' : 'Connected · Local practice';
-        get('phone-question').textContent = state.latest;
-        const answers = JSON.stringify(state.answers);
-        if (rendered !== answers) {
-          rendered = answers;
-          get('phone-answers').replaceChildren(...state.answers.slice().reverse().map(answerCard));
+        reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '', first = true;
+        while (true) {
+          const {value, done} = await reader.read(); if (done) break;
+          const received = performance.now();
+          buffer += decoder.decode(value, {stream: true});
+          if (buffer.length > 8 * 1024 * 1024) throw new Error('Companion update too large. Reconnecting.');
+          let boundary;
+          while ((boundary = buffer.indexOf('\n')) >= 0) {
+            const line = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 1);
+            if (!line) continue;
+            const event = JSON.parse(line); handle(event);
+            if (event.type !== 'keepalive') {
+              const handshake = first ? `Connection to first snapshot: ${(performance.now() - started).toFixed(1)} ms. ` : '';
+              first = false;
+              requestAnimationFrame(() => { get('phone-display-latency').textContent = handshake + `Latest ${event.type}: received-to-render ${(performance.now() - received).toFixed(1)} ms. Phone time ${new Date().toLocaleTimeString()}.`; });
+            }
+          }
         }
+        throw new Error('Connection ended.');
       } catch (error) {
-        get('phone-answers').replaceChildren(); get('phone-question').textContent = ''; rendered = '';
         if (error.status === 403) {
           sessionStorage.removeItem('iaDevice'); delete options.headers.Authorization;
-          get('phone-pairing').hidden = false; get('phone-status').textContent = error.message;
-        } else get('phone-status').textContent = 'Disconnected. Reconnecting automatically when the Mac is reachable…';
-      } finally { polling = false; setTimeout(refresh, 1500); }
+          clearPhone(); get('phone-pairing').hidden = false; get('phone-status').textContent = error.message;
+        } else get('phone-status').textContent = 'Disconnected. Reconnecting automatically; Mac interview context is preserved…';
+      } finally {
+        if (reader) await reader.cancel().catch(() => {});
+        streaming = false; setTimeout(refresh, 1500);
+      }
     }
     let waiting = false;
     async function approval() {

@@ -52,8 +52,8 @@ def test_no_arbitrary_answer_reservation_cutoff_during_free_session():
 
 
 @pytest.mark.parametrize('status,message', [
-    (401, 'API key was rejected'), (402, 'free allowance exhausted'),
-    (403, 'denied access'), (429, 'free allowance exhausted or rate limited'),
+    (401, 'API key was rejected'), (402, 'payment-required'),
+    (403, 'denied access'), (429, 'rate limit or quota rejection'),
 ])
 def test_groq_errors_stop_both_streams_without_retry(status, message):
     async def check():
@@ -198,7 +198,9 @@ def test_local_functionality_remains_available_after_provider_exhaustion():
     session.answers = FakeAnswers()
     session.capture_factory = FakeCapture
     session.transcriber_factory = FakeTranscriber
-    session.answers.generate = AsyncMock(side_effect=ValueError('Groq free allowance exhausted.'))
+    from app.provider_errors import groq_failure
+    class ProviderFailure(Exception): status_code = 402
+    session.answers.generate = AsyncMock(side_effect=groq_failure(ProviderFailure()))
     with TestClient(app) as client:
         client.get('/')
         with client.websocket_connect('/ws?client=local-after-failure-123', headers=ORIGIN) as ws:

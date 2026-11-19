@@ -20,7 +20,7 @@ The Mac remains responsible for live microphone/system audio, session authorisat
 
 ## Disconnect or revoke
 
-The Mac shows the approved device name, its address, connection status and remaining access time. A temporary Wi-Fi interruption reconnects automatically while the existing credential remains valid. Updates resume with the current shared answers; answer submissions are never automatically retried.
+The Mac shows the approved device name, its address, connection status and remaining access time. A temporary Wi-Fi interruption reconnects automatically while the existing credential remains valid. Updates resume from a current snapshot containing separate interviewer and microphone transcripts and the current AI answer; answer submissions are never automatically retried.
 
 Access expires after **two hours**. Use **Revoke Device** on the Mac to invalidate credentials immediately and close the companion listener. Pairing again replaces the previous invitation and device. Restarting the backend also revokes access. Revocation prevents future requests; it cannot erase information the phone has already displayed or copied.
 
@@ -45,7 +45,7 @@ Invitation, pending-approval and approved-device credentials are separate, rando
 
 **Local HTTP is authenticated but not encrypted.** Use a trusted private Wi-Fi network. HTTP cannot protect credentials or interview content from a compromised router, network observer or active attacker. Local restrictions do not provide the transport confidentiality of HTTPS, and a compromised device on the Wi-Fi remains a risk. There is no automatic tunnel, third-party hosting, UPnP or public listener.
 
-Basic Safari page loading, same-origin requests, answer polling, written questions, file uploads and session storage do not require a secure context. Browser **screen capture (`getDisplayMedia`)** and direct browser **microphone/camera capture (`getUserMedia`)** do require one. An HTTP LAN IP does not count as trusted localhost. The phone companion does not capture live microphone/system audio; those remain on the Mac. Its screen-capture button is hidden when the browser does not expose that API. HTTPS alone also cannot add an API unsupported by iPhone Safari.
+Basic Safari page loading, same-origin requests, live answer delivery, written questions, file uploads and session storage do not require a secure context. Browser **screen capture (`getDisplayMedia`)** and direct browser **microphone/camera capture (`getUserMedia`)** do require one. An HTTP LAN IP does not count as trusted localhost. The phone companion does not capture live microphone/system audio; those remain on the Mac. Its screen-capture button is hidden when the browser does not expose that API. HTTPS alone also cannot add an API unsupported by iPhone Safari.
 
 The simplest option for a screenshot question is to take a screenshot on the iPhone and upload that image, or use the Mac's localhost screen-capture feature. If encrypted LAN transport or an available secure-context-only browser feature is required, it needs a separate private-LAN HTTPS setup with a certificate trusted by the iPhone. This application does not configure that setup automatically, and its former external forwarding setting is no longer used. No HTTPS setup is necessary for the ordinary pairing flow above.
 
@@ -58,3 +58,21 @@ Automated tests cover local URLs and QR encoding, expired/invalid/single-use inv
 A separate real TCP check on this Mac's private Wi-Fi address verified page loading, QR generation, approval/authentication, local practice, control-route restrictions and listener shutdown after revocation. This is a Mac-to-Mac-network-address check, **not an iPhone test**.
 
 **Physical iPhone camera scanning, Safari pairing, firewall prompts, Wi-Fi isolation and phone sleep/reconnection have not been verified on an actual iPhone.** Follow the steps above to perform that final device check; do not treat automated tests as proof of physical phone pairing.
+
+
+## Live speaker and answer display
+
+The phone has **INTERVIEWER** (system audio), **YOU** (physical microphone) and **SUGGESTED ANSWER** (AI output) sections. Raw questions and your spoken responses never populate the AI answer card. Partial transcripts update immediately, and streamed spoken-answer text is labelled as an unvalidated AI draft until the complete response passes validation. Supporting evidence, code and detail are collapsed beneath the spoken response.
+
+Updates use an authenticated same-origin streaming connection rather than the previous 1.5-second state poll. Brief disconnections reconnect to the current Mac state and do not stop or reset the laptop session. Reconnection retries only the local companion connection, never a provider request. Device revocation also ends the update stream.
+
+Likely duplicate speech across system audio and microphone is hidden from YOU and from model conversation context while retaining original source metadata in the session. This is a conservative text/time heuristic, not diarization or acoustic echo cancellation. It can miss echoes or suppress a genuine rapid repetition. Use headphones when possible to reduce speaker bleed, and confirm that the Mac's microphone selector is your physical microphone rather than a virtual system-audio device.
+
+Open **Latency diagnostics** on either device to see capture, transcript, question and generation stage times. The phone also measures its local received-to-render interval. See [LIVE-PIPELINE.md](LIVE-PIPELINE.md) for implementation limits, tests and explicitly labelled local measurements.
+
+
+## Groq failures and Waiting status
+
+The phone now shows **Generating a suggested answer** as soon as generation begins. A Groq failure remains visible after cleanup and reconnection. Expand **Latency diagnostics → Last Groq failure · safe diagnostic details** to see its category, HTTP status (or no status for local/network failures), exception type and safe request settings. Non-billing/access/rate-limit failures pause suggestions while transcription continues; strict provider limits still stop live services. No failed provider request is automatically retried. Stop and correct the reported cause before authorising a new session.
+
+The production backend saves only the last safe failure in `.runtime/last-groq-error.json`. This file is owner-only, contains no interview/CV text or API keys, and is not a session archive. Prior missing session records cannot be reconstructed from it. See [REGRESSION-INVESTIGATION.md](REGRESSION-INVESTIGATION.md) for the SDK compatibility correction and limits of the historical investigation.

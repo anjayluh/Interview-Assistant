@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .practice import BANK, MIXED, PracticeTurn, practice
@@ -173,7 +173,35 @@ def copilot_routes(store, token, control, phone):
     async def phone_state(request: Request):
         authorize(request)
         session = control.session
-        return {'state': session.state, 'latest': session.latest, 'answers': list(session.suggestions)}
+        return session.companion_state()
+
+    @router.get('/api/companion/events')
+    async def phone_events(request: Request):
+        phone.authorize(request)
+        session = control.session
+        if len(session.subscribers) >= 3:
+            raise HTTPException(409, 'Close duplicate companion tabs before reconnecting.')
+        queue = asyncio.Queue(maxsize=64)
+        session.subscribers.add(queue)
+        async def events():
+            import json
+            try:
+                yield json.dumps({'type': 'companion_snapshot', **session.companion_state()}) + '\n'
+                while True:
+                    try:
+                        event = await asyncio.wait_for(queue.get(), 1)
+                    except TimeoutError:
+                        event = {'type': 'keepalive'}
+                    try:
+                        phone.authorize(request)
+                    except HTTPException:
+                        yield json.dumps({'type': 'revoked'}) + '\n'
+                        return
+                    yield json.dumps(event) + '\n'
+            finally:
+                session.subscribers.discard(queue)
+        return StreamingResponse(events(), media_type='application/x-ndjson',
+                                 headers={'X-Accel-Buffering': 'no'})
 
     @router.post('/api/companion/answer')
     async def phone_answer(request: Request, data: WrittenQuestion):
@@ -181,6 +209,8 @@ def copilot_routes(store, token, control, phone):
         session = control.session
         if session.state != 'running' or session.deadline_reached():
             raise HTTPException(409, 'Authorise a live session on the laptop first.')
+        if not session.answer_enabled:
+            raise HTTPException(409, 'Groq suggestions are paused. Correct the reported cause before starting a new authorised session.')
         if session.answer_task and not session.answer_task.done():
             raise HTTPException(409, 'The copilot is already drafting a response.')
         if not data.question.strip():

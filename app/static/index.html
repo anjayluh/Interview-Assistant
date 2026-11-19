@@ -30,7 +30,7 @@
   <summary>Live session safety <strong id="live-mode" class="badge">LOCAL-ONLY</strong></summary>
   <p><strong>FREE USAGE ONLY</strong> · Use your AssemblyAI trial credits and Groq Free-plan capacity. Your confirmed account setup has no payment methods or authorised paid billing.</p>
   <div class="setup-grid">
-    <div><label for="live-minutes">Session limit (minutes)</label><input id="live-minutes" type="number" min="5" max="120" step="1" value="60"></div>
+    <div><label for="live-minutes">Session limit (minutes)</label><input id="live-minutes" type="number" min="5" max="120" step="1" value="60"><button id="reset-live-duration" type="button" class="quiet">Use 60 minutes</button><small>Choose 5–120 minutes. A new page starts at 60 minutes.</small></div>
     <div><label for="live-cap">Maximum user expenditure (UGX)</label><input id="live-cap" type="number" value="0" readonly></div>
   </div>
   <p id="live-quote" role="status">Checking local session settings…</p>
@@ -81,6 +81,7 @@
 </details>
 <div class="status-row"><button id="open-profile" class="quiet">Professional profile &amp; CVs</button><span id="assembly">AssemblyAI: not connected</span><span id="groq">Groq: not checked</span><button id="refresh" class="text-button">Refresh devices</button></div>
 <p id="notice" role="status">Ready. No audio is captured until you start a session or test.</p><p id="error" role="alert" hidden></p>
+<details class="panel copilot-tool"><summary>Live latency diagnostics</summary><p>Measured stage times since session start. Audio quality and provider end-of-turn settings are unchanged.</p><pre id="live-latency"></pre><details><summary>Last Groq failure · safe diagnostic details</summary><pre id="provider-error-diagnostic"></pre></details></details>
 <div class="workspace"><section class="panel transcript-panel"><div class="section-top"><div><h2>Transcript</h2></div><button id="clear" class="quiet">Clear transcript</button></div><div id="transcript" class="transcript transcript-sources">
   <section><h3>Interviewer</h3><div id="transcript-interviewer" class="source-turns"></div></section>
   <section><h3>You</h3><div id="transcript-me" class="source-turns"></div></section>

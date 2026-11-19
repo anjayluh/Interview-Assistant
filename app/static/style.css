@@ -73,3 +73,8 @@ input:focus-visible, textarea:focus-visible { outline: 2px solid var(--mint); ou
 #phone-qr { display:block; max-width:100%; height:auto; background:white; }
 #phone-invite a { overflow-wrap:anywhere; }
 #phone-pending { border:1px solid currentColor; border-radius:8px; padding:12px; margin-top:12px; }
+
+.phone-transcript { max-height:28vh; overflow:auto; white-space:pre-wrap; }
+.source-note { color:var(--muted); font-size:12px; }
+#phone-draft { white-space:pre-wrap; font-size:20px; line-height:1.65; }
+#live-latency { white-space:pre-wrap; font-size:12px; }

@@ -3,11 +3,14 @@ const $ = id => document.getElementById(id);
 let socket, retry = 0, timer, elapsed = 0, usage = 0, running = false, connected = false;
 let currentState = 'idle';
 let quoteData, quoteTimer, quoteRequest = 0, heartbeat;
-let keysReady = false;
+let quoteFailures = 0;
+let keysReady = false, answersEnabled = true;
 const safetyFields = ['live-minutes', 'live-cap', 'keyterms'];
 let interviewRan = false;
 const client = sessionStorage.iaClient || (sessionStorage.iaClient = crypto.randomUUID());
 const rows = new Map();
+const liveMetrics = [];
+let answerDraft;
 let audioAckTimer;
 const audioDiagnostics = [];
 let showAudioDiagnostics = false;
@@ -81,7 +84,7 @@ function buttons() {
   $('test-mic').disabled = !ready || !$('mic').value;
   $('test-system').disabled = !ready || !$('system').value;
   $('stop').disabled = idle;
-  $('answer').disabled = !connected || currentState !== 'running';
+  $('answer').disabled = !connected || currentState !== 'running' || !answersEnabled;
   $('mic').disabled = $('system').disabled = !idle;
   $('refresh').disabled = !idle;
   for (const id of safetyFields) $(id).disabled = !idle;
@@ -94,6 +97,11 @@ function clock() {
 function idleMode(mode) { return mode === 'idle' || mode === 'testing'; }
 function state(s) {
   currentState = s.state;
+  answersEnabled = s.answer_enabled !== false;
+  if (s.answer_status?.phase === 'failed') {
+    error(s.answer_status.message);
+    $('provider-error-diagnostic').textContent = JSON.stringify(s.answer_status.diagnostic, null, 2);
+  }
   if (!idleMode(s.state)) hideAudioDiagnostics();
   running = s.state === 'running'; elapsed = s.duration; usage = s.channel_seconds;
   if (running || s.state === 'starting') interviewRan = true;
@@ -111,7 +119,7 @@ function state(s) {
   $('length').value = s.length;
   $('limit').textContent = `Session limit: ${idleMode(s.state) ? $('live-minutes').value : s.limit_minutes} min`;
   $('assembly').textContent = `AssemblyAI: ${s.configured.assemblyai ? (running ? '2 streams connected' : s.state === 'starting' ? 'connecting…' : 'disconnected') : 'key missing'}`;
-  $('groq').textContent = `Groq: ${s.configured.groq ? (s.groq_verified ? 'model verified' : 'not checked') : 'key missing'} · ${s.model}`;
+  $('groq').textContent = `Groq: ${s.configured.groq ? (!answersEnabled ? 'suggestions paused' : s.groq_verified ? 'model verified' : 'not checked') : 'key missing'} · ${s.model}`;
   for (const role of ['me','interviewer']) {
     const diagnostic = (showAudioDiagnostics ? s.audio_diagnostics || [] : []).filter(item => item.role === role).at(-1);
     const label = diagnostic?.stage === 'error' ? 'Test failed — see Audio diagnostics'
@@ -129,6 +137,8 @@ function state(s) {
   buttons(); clock();
 }
 function transcript(x) {
+  if (!['me', 'interviewer'].includes(x.role)) return;
+  if (x.duplicate_of) { rows.get(x.key)?.remove(); rows.delete(x.key); return; }
   const source = $(`transcript-${x.role}`);
   let row = rows.get(x.key);
   if (!row) {
@@ -136,18 +146,20 @@ function transcript(x) {
     rows.set(x.key, row);
     source.append(row);
   }
+  row.dataset.source = x.source || x.role;
   row.className = `utterance ${x.role} ${x.final ? '' : 'partial'} ${x.continuation ? 'continuation' : ''}`;
   row.textContent = x.text;
   while (rows.size > 122) { const key = rows.keys().next().value; rows.get(key).remove(); rows.delete(key); }
   source.scrollTop = source.scrollHeight;
 }
 function answer(x) {
+  answerDraft?.remove(); answerDraft = null;
   $('answers').querySelector('.empty')?.remove();
   $('answers').prepend(answerCard(x));
   while ($('answers').children.length > 12) $('answers').lastChild.remove();
   $('answers').scrollTop = 0;
 }
-function clear() { rows.clear(); $('transcript-interviewer').replaceChildren(); $('transcript-me').replaceChildren(); $('answers').replaceChildren(); }
+function clear() { answerDraft?.remove(); answerDraft = null; liveMetrics.length = 0; renderLatency(liveMetrics); rows.clear(); $('transcript-interviewer').replaceChildren(); $('transcript-me').replaceChildren(); $('answers').replaceChildren(); }
 function connect() {
   socket = new WebSocket(`ws://${location.host}/ws?client=${encodeURIComponent(client)}`);
   socket.onopen = () => {
@@ -158,7 +170,7 @@ function connect() {
     heartbeat = setInterval(() => {
       if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({cmd: 'heartbeat'}));
     }, 3000);
-    buttons();
+    buttons(); refreshQuote();
   };
   socket.onmessage = e => {
     const x = JSON.parse(e.data);
@@ -166,11 +178,17 @@ function connect() {
     else if (x.type === 'state') state(x);
     else if (x.type === 'transcript') transcript(x);
     else if (x.type === 'answer') answer(x);
+    else if (x.type === 'answer_delta') {
+      if (!answerDraft) { answerDraft = document.createElement('article'); answerDraft.className = 'answer-card response'; $('answers').prepend(answerDraft); }
+      answerDraft.textContent = 'AI draft · still generating\n' + x.text;
+    }
+    else if (x.type === 'answer_superseded') { answerDraft?.remove(); answerDraft = null; $('answers').replaceChildren(); }
+    else if (x.type === 'latency') { liveMetrics.push(x); if (liveMetrics.length > 80) liveMetrics.shift(); renderLatency(liveMetrics); }
     else if (x.type === 'audio_diagnostic') audioDiagnostic(x);
     else if (x.type === 'level') $(`level-${x.role}`).value = x.value;
     else if (x.type === 'error') { clearTimeout(audioAckTimer); error(x.message); if (currentState === 'idle') refreshQuote(); }
     else if (x.type === 'clear') clear();
-    else if (x.type === 'groq') { $('groq').textContent = `Groq: ${x.status}`; $('answer').disabled = x.status === 'generating' || currentState !== 'running'; }
+    else if (x.type === 'groq') { $('groq').textContent = `Groq: ${x.status}`; if (x.status === 'error') answersEnabled = false; $('answer').disabled = !answersEnabled || x.status === 'generating' || currentState !== 'running'; }
   };
   socket.onclose = e => {
     connected = false; clearInterval(timer); clearInterval(heartbeat); $('connection').textContent = 'Disconnected'; buttons();
@@ -191,7 +209,9 @@ async function refresh() {
     }
     const blackhole = data.devices?.find(d => /blackhole|ideashare/i.test(d.name));
     if (blackhole && !$('system').value) $('system').value = String(blackhole.id);
-    const mic = data.devices?.find(d => !/blackhole|ideashare|teams|parrot/i.test(d.name));
+    const mic = data.devices?.find(d => /macbook pro microphone/i.test(d.name))
+      || data.devices?.find(d => /macbook.*microphone|built-in.*microphone/i.test(d.name))
+      || data.devices?.find(d => !/blackhole|ideashare|teams|parrot/i.test(d.name));
     if (mic && !$('mic').value) $('mic').value = String(mic.id);
     if (data.error) error(data.error);
     buttons();
@@ -202,8 +222,8 @@ function liveOptions() {
 }
 function showQuote(data) {
   quoteData = data;
-  $('live-quote').textContent = data?.allowance_status || 'Unable to check local session settings.';
-  const reasons = data?.blockers || ['Check that the session duration is valid and the local backend is running.'];
+  $('live-quote').textContent = data?.allowance_status || 'Checking local session settings…';
+  const reasons = data?.blockers || [];
   $('live-blockers').replaceChildren(...reasons.map(reason => {
     const item = document.createElement('li');
     item.textContent = reason;
@@ -212,22 +232,57 @@ function showQuote(data) {
   if (currentState === 'idle') $('limit').textContent = 'Session limit: ' + ($('live-minutes').value || '—') + ' min';
   buttons();
 }
+function durationProblem() {
+  const field = $('live-minutes');
+  const maximum = Math.min(Number(field.max) || 120, 120);
+  if (!Number.isInteger(field.valueAsNumber) || field.valueAsNumber < 5 || field.valueAsNumber > maximum) {
+    return `Choose a whole-number session duration from 5 to ${maximum} minutes. The current value is ${field.value || 'empty'}. Use 60 minutes for a normal interview.`;
+  }
+  return '';
+}
+function settingsFailure(message, retry = false) {
+  showQuote({allowance_status: 'Live session settings need attention.', blockers: [message]});
+  if (retry && currentState === 'idle') {
+    quoteTimer = setTimeout(refreshQuote, Math.min(2000 * 2 ** quoteFailures++, 10000));
+  }
+}
 async function refreshQuote() {
   clearTimeout(quoteTimer);
   const request = ++quoteRequest;
+  const problem = durationProblem();
+  if (problem) { settingsFailure(problem); return null; }
   const options = liveOptions();
+  const abort = new AbortController();
+  const timeout = setTimeout(() => abort.abort(), 5000);
   try {
     const response = await fetch('/api/live-quote', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
+      method: 'POST', headers: {'Content-Type': 'application/json'}, signal: abort.signal,
       body: JSON.stringify({options, keyterms: $('keyterms').checked}),
     });
-    const data = response.ok ? await response.json() : null;
-    if (request === quoteRequest) showQuote(data);
-    return request === quoteRequest ? data : null;
-  } catch {
-    if (request === quoteRequest) showQuote(null);
+    const data = await response.json();
+    if (request !== quoteRequest) return null;
+    if (!response.ok) {
+      let message;
+      if (response.status === 422) {
+        const durationError = Array.isArray(data.detail) && data.detail.find(x => x.loc?.includes('minutes'));
+        message = durationError ? 'The backend rejected the session duration: ' + durationError.msg + '. Choose 5–120 minutes.'
+          : 'The backend rejected the local session settings (HTTP 422). Review the highlighted session fields.';
+      } else if (response.status === 403) {
+        message = 'The local app connection expired (HTTP 403). Refreshing its connection and checking again…';
+        await fetch('/', {cache: 'no-store'});
+      } else message = `The local session-settings service returned HTTP ${response.status}. Retrying automatically; no provider requests are being made.`;
+      settingsFailure(message, response.status !== 422);
+      return null;
+    }
+    quoteFailures = 0;
+    showQuote(data);
+    return data;
+  } catch (error) {
+    if (request === quoteRequest) settingsFailure(error.name === 'AbortError'
+      ? 'The local session-settings check timed out after 5 seconds. Retrying automatically; no live session has started.'
+      : 'The local app connection is temporarily unavailable. Reconnecting and checking session settings automatically; no live session has started.', true);
     return null;
-  }
+  } finally { clearTimeout(timeout); }
 }
 for (const id of safetyFields) {
   $(id).addEventListener('input', () => {
@@ -281,5 +336,16 @@ $('review-safety').onclick = () => {
   const panel = document.querySelector('.safety-panel');
   panel.open = true;
   panel.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+};
+// Browser form restoration must not turn a fresh launch into an invalid old duration.
+$('live-minutes').value = $('live-minutes').defaultValue || '60';
+window.addEventListener('pageshow', event => {
+  if (currentState !== 'idle') return;
+  if (!event.persisted) $('live-minutes').value = $('live-minutes').defaultValue || '60';
+  refreshQuote();
+});
+$('reset-live-duration').onclick = () => {
+  $('live-minutes').value = '60';
+  refreshQuote();
 };
 connect(); refresh(); refreshQuote();

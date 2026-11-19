@@ -5,7 +5,10 @@
 <body data-companion="true"><header><h1>Interview Copilot</h1></header><main>
 <p id="phone-status" role="status">Open the private pairing link from the laptop.</p>
 <section id="phone-pairing" class="panel"><label for="phone-device-name">Device name</label><input id="phone-device-name" maxlength="80" value="iPhone Safari"><label for="phone-pair-code">Pairing code from the Mac</label><input id="phone-pair-code" maxlength="100" autocomplete="off"><button id="phone-connect" type="button">Request pairing</button><p id="phone-comparison"></p></section>
-<section class="panel copilot-tool"><h2>Suggested answers</h2><p id="phone-question"></p><div id="phone-answers"></div></section>
+<section class="panel copilot-tool"><h2>INTERVIEWER</h2><p class="source-note">System audio · questions, instructions and constraints</p><div id="phone-interviewer" class="phone-transcript" aria-live="polite"></div></section>
+<section class="panel copilot-tool"><h2>YOU</h2><p class="source-note">Physical microphone · what you said</p><div id="phone-me" class="phone-transcript" aria-live="polite"></div><p id="phone-bleed" role="status"></p></section>
+<section class="panel copilot-tool"><h2>SUGGESTED ANSWER</h2><p id="phone-answer-status">Waiting for an interviewer question.</p><div id="phone-draft" class="response" hidden></div><div id="phone-answers"></div></section>
+<details class="panel copilot-tool"><summary>Latency diagnostics</summary><p>Times since this live session started. Phone rendering is measured locally; network one-way time is not inferred from unsynchronised clocks.</p><pre id="live-latency"></pre><details><summary>Last Groq failure · safe diagnostic details</summary><pre id="provider-error-diagnostic"></pre></details><p id="phone-display-latency"></p></details>
 <details class="panel copilot-tool">
   <summary>Written questions &amp; coding challenges</summary>
   <div class="copilot-actions">

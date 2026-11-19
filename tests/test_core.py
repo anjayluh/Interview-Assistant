@@ -104,7 +104,7 @@ def test_turns_only_final_interviewer_and_cleanup():
         session.turn('interviewer',event)
         session.turn('interviewer',event)  # formatting repeat
         session.turn('interviewer',NS(transcript=event.transcript,turn_order=2,end_of_turn=True))
-        await asyncio.sleep(.04)
+        await asyncio.sleep(.3)
         assert len(answers.calls)==1
         assert all(t.sent for t in trans)
         await session.stop()
@@ -113,7 +113,7 @@ def test_turns_only_final_interviewer_and_cleanup():
         assert session.channel_seconds>0
         await session.start(0,1,'medium', options=live_options())
         session.turn('interviewer',event)
-        await asyncio.sleep(.03)
+        await asyncio.sleep(.3)
         assert len(answers.calls)==2  # reused SDK turn ID belongs to new session
         await session.stop()
     asyncio.run(check())

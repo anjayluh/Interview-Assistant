@@ -17,7 +17,7 @@ from starlette.responses import JSONResponse
 
 PRIVATE = tuple(ipaddress.ip_network(x) for x in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
 PATHS = {'/companion', '/static/copilot.js', '/static/style.css', '/api/companion/claim',
-         '/api/companion/approval', '/api/companion/state', '/api/companion/answer',
+         '/api/companion/approval', '/api/companion/events', '/api/companion/state', '/api/companion/answer',
          '/api/copilot/scenarios', '/api/copilot/practice', '/api/copilot/ocr'}
 
 

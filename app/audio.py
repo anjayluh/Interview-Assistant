@@ -25,6 +25,7 @@ class Capture:
         self.level = 0.0
         self.level_at = 0.0
         self.name = ''
+        self.first_callback_at = None
         self.callback_count = 0
         self.frame_count = 0
         self.peak_level = 0.0
@@ -33,6 +34,8 @@ class Capture:
     def callback(self, data, frames, timing, status):
         if self.closed:
             return
+        if self.first_callback_at is None:
+            self.first_callback_at = time.monotonic()
         self.callback_count += 1
         self.frame_count += frames
         if status:

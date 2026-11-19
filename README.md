@@ -89,7 +89,7 @@ The transcript holds 120 completed turns, up to 5,000 characters each; up to eig
 
 The user has confirmed that neither AssemblyAI nor Groq has a payment card and that no paid subscription, upgrade, auto-reload or invoice agreement is authorised. The app uses available AssemblyAI trial credit and Groq Free capacity with maximum user expenditure set to **UGX 0**.
 
-Select the microphone and system input, choose the session duration and click **Start free live session**. Confirm the session when prompted. No exchange rate, balance reservation, 15-minute billing confirmation, pricing proof or quota entry is required. The app does not claim to know the remaining account allowance or promise that it will cover the selected duration. A provider failure stops live transcription and cloud answers without disabling local practice, CV tools or phone pairing.
+Select the microphone and system input, choose the session duration and click **Start free live session**. Confirm the session when prompted. No exchange rate, balance reservation, 15-minute billing confirmation, pricing proof or quota entry is required. The app does not claim to know the remaining account allowance or promise that it will cover the selected duration. Authentication, access, billing and rate-limit failures stop live services. Other answer-generation failures pause suggestions while independent transcription continues until STOP ALL/deadline. Local practice, CV tools and phone pairing remain available.
 
 The session defaults to **60 minutes**, selectable from **5 to 120 minutes**. The server enforces the selected deadline from before the first provider request, including connection setup. `MAX_SESSION_MINUTES` remains the optional server-side ceiling (120 by default). The local session-settings check prevents invalid durations and any non-zero spending policy. It does not contact a provider.
 
@@ -167,3 +167,22 @@ The Mac continues to control audio capture, provider authorisation and STOP ALL.
 Open **Phone companion → Pair Phone** on the Mac. Scan its QR code on an iPhone connected to the same trusted Wi-Fi, then approve the matching device and comparison code on the Mac. The local-network URL and an alternative short code are also displayed. Invitations expire after two minutes; approved access lasts up to two hours. **Revoke Device** immediately ends access and closes the companion listener. Pairing again replaces the previous device.
 
 The laptop stays on loopback. Pairing opens a separate companion-only listener bound to a selected private network address, with subnet, Host, Origin and authentication checks. No external hosting, forwarding or tunnel is used. Basic companion features work over local HTTP; HTTP does not encrypt traffic, so use a trusted private network. Browser screen capture requires a secure context and is hidden when unavailable; uploading an existing screenshot works without it. See [PHONE-SETUP.md](PHONE-SETUP.md) for instructions, security limits and verification status.
+
+
+## Live source separation and latency
+
+The phone separates system-audio **INTERVIEWER**, physical-microphone **YOU** and AI **SUGGESTED ANSWER**. It receives partial transcripts and answer drafts through an authenticated push stream. Interviewer instructions and coding constraints are retained with their question; clarification updates supersede obsolete generation. Candidate speech never triggers automatic answers. Spoken AI text appears first, with evidence/code/detail underneath.
+
+Live latency diagnostics show stage timestamps on the Mac and phone. Audio remains 16 kHz PCM16 with 50 ms blocks, bounded queues and unchanged transcription turn-silence settings. [LIVE-PIPELINE.md](LIVE-PIPELINE.md) documents the measured local test results, streaming validation policy and limits of speaker-bleed detection. Physical iPhone and live-provider latency are not verified by mocked tests.
+
+
+## Groq regression diagnostics
+
+[REGRESSION-INVESTIGATION.md](REGRESSION-INVESTIGATION.md) distinguishes the unrecovered historical interviews from the confirmed local SDK incompatibility. The unsupported `stream_options` argument has been removed; tests now use the installed SDK against offline HTTP/SSE transport. Generation/error status is pushed to the phone and retained through cleanup. The production app saves its latest allowlisted failure metadata in owner-only `.runtime/last-groq-error.json`; no API keys, CV/transcript text or raw provider bodies are stored. No real provider verification was performed.
+
+
+## Startup/settings recovery
+
+Fresh pages start at 60 minutes and show the permitted 5–120-minute range. Invalid values now produce a specific message and a **Use 60 minutes** correction button. Temporary local settings failures retry automatically without starting providers. Stop waits for shutdown completion, and Start retries the app lock after an exiting process releases it. [STARTUP-REPAIR.md](STARTUP-REPAIR.md) records the real Desktop launcher tests and the confirmed causes.
+
+The microphone selector defaults to **MacBook Pro Microphone** when available, ahead of an iPhone continuity microphone. Refreshing devices preserves your existing selection when it is still available.

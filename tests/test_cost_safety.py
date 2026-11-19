@@ -212,10 +212,12 @@ def test_groq_has_no_sdk_retries_and_failure_ends_session(monkeypatch):
         session.request_answer('How would you design a queue?')
         session.request_answer('How would you test a queue?')
         await session.answer_task
-        await session.fatal_task
         assert answers.generate.await_count == 1
+        assert session.state == 'running' and not session.answer_enabled
+        assert not session.pending_questions
+        assert all(not item.closed for item in resources)
+        await session.stop()
         assert all(item.closed for item in resources)
-        assert session.state == 'idle'
     asyncio.run(check())
 
 

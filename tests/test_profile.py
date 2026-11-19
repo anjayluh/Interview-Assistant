@@ -224,6 +224,7 @@ def test_session_snapshot_and_privacy_between_interviews():
         assert all(not trans.use_keyterms for trans in session.transcribers.values())
         event = NS(transcript='How do you use Django?', turn_order=1, end_of_turn=True)
         session.turn('interviewer', event)
+        if session.question_task: await session.question_task
         await session.answer_task
         assert 'unique-first-interview-fact' in answers.calls[0][0]
         session.turn('interviewer', NS(transcript='How do you use Django in production?', turn_order=1, end_of_turn=True))
@@ -236,6 +237,7 @@ def test_session_snapshot_and_privacy_between_interviews():
         assert all(trans.use_keyterms for trans in session.transcribers.values())
         assert not session.suggestions and not session.history
         session.turn('interviewer', event)
+        if session.question_task: await session.question_task
         await session.answer_task
         assert 'unique-first-interview-fact' not in answers.calls[1][0]
         assert 'Private first role' not in answers.calls[1][0]

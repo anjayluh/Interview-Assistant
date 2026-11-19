@@ -74,7 +74,7 @@ class Controller:
         await self.stop('Backend shutting down.')
 
 
-def create_app(settings=None, profile_store=None):
+def create_app(settings=None, profile_store=None, diagnostic_path=None):
     # Provider debug/error payloads can contain request details.
     for name in ('assemblyai', 'groq', 'httpx', 'httpcore', 'websockets'):
         logger = logging.getLogger(name)
@@ -84,6 +84,9 @@ def create_app(settings=None, profile_store=None):
     settings = settings or Settings()
     phone = Phone()
     control = Controller(settings)
+    if diagnostic_path:
+        from .provider_errors import save_diagnostic
+        control.session.diagnostic_sink = lambda diagnostic: save_diagnostic(diagnostic_path, diagnostic)
     token = secrets.token_urlsafe(32)
     pending_quote = None
     store = profile_store or ProfileStore(ROOT / '.runtime/professional-profile.json')
@@ -315,4 +318,4 @@ def valid_length(data):
         raise ValueError('Choose Brief, Standard or Detailed answers.')
     return length
 
-app = create_app()
+app = create_app(diagnostic_path=ROOT / '.runtime/last-groq-error.json')
