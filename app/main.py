@@ -96,7 +96,7 @@ def create_app(settings=None, profile_store=None, phone_origin=None):
             options = LiveOptions.model_validate(data.get('live', {}))
         except ValueError:
             raise ValueError('Check the interview setup and live safety fields.') from None
-        pricing = quote(options, setup.keyterms, settings.max_minutes)
+        pricing = quote(options, setup.keyterms, settings.max_minutes, settings.model)
         pricing.require_authorisation()
         if (pending_quote is None or data.get('quote_id') != pending_quote[0]
                 or (options.model_copy(update={'confirmed': False}), setup.keyterms) != pending_quote[1:3]
@@ -165,7 +165,7 @@ def create_app(settings=None, profile_store=None, phone_origin=None):
         if not local_write(request):
             return JSONResponse({'error': 'Open the app locally.'}, status_code=403)
         nonlocal pending_quote
-        result = quote(data.options, data.keyterms, settings.max_minutes).public()
+        result = quote(data.options, data.keyterms, settings.max_minutes, settings.model).public()
         pending_quote = None
         if not result['blockers']:
             quote_id = secrets.token_urlsafe(24)

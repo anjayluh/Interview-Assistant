@@ -7,7 +7,7 @@ A local, compact interview companion for an Apple Silicon Mac with 8 GB RAM. It 
 1. Double-click `~/Desktop/Start Interview Assistant.command`. Brave opens at http://127.0.0.1:8765 in **LOCAL-ONLY** mode.
 2. Manage CVs, edit the professional profile and prepare an interview. These operations require no keys and make no provider requests.
 3. For audio routing, select the microphone and system input and run their separate **Test** buttons. Each ten-second test stays on your Mac.
-4. Leave the cap at **UGX 0** if you have no budget. Review **Live session safety** only if you intend to authorise paid services.
+4. Keep the cap at **UGX 0**. Open **Live session safety** to confirm free balances and zero-billing protection before starting a free live session.
 5. **STOP ALL** ends the active capture and live requests, clears the temporary interview data and returns to local-only mode. The Desktop **Stop Interview Assistant.command** exits the backend. Restart the backend after editing `.env`.
 
 ## API configuration
@@ -39,7 +39,7 @@ To hear the interviewer while capturing system audio:
 4. In the interview application's speaker setting, choose that Multi-Output Device. If it follows the macOS default, select the Multi-Output Device as the system output yourself. This routes all system sound, including notifications, into the capture; mute unwanted notifications yourself if needed.
 5. Keep your meeting application's microphone set to your actual physical microphone. **Do not set its microphone to BlackHole**: doing so can send the interviewer's own audio back to them.
 6. In Interview Assistant, choose your physical microphone under **Your microphone**, and **BlackHole 2ch** under **Interviewer · system audio**.
-7. Test microphone: speak, verify its meter moves. Test system audio: play ordinary speech in Brave, verify the second meter moves and you can still hear it. Do these before starting a paid session.
+7. Test microphone: speak, verify its meter moves. Test system audio: play ordinary speech in Brave, verify the second meter moves and you can still hear it. Do these before starting a free live session.
 
 No app setting changes audio routing for you. A Multi-Output Device sends playback to two outputs; it is not an input selector. The assistant opens the microphone and BlackHole independently, so an Aggregate Device is unnecessary. BlackHole's two stereo channels are downmixed to one interviewer source. This supports interviewer-versus-you attribution, not individual identification of multiple people sharing the system source. Physical speaker sound can bleed into the mic: headphones help.
 
@@ -85,21 +85,38 @@ The transcript holds 120 completed turns, up to 5,000 characters each; up to eig
 
 `sounddevice` supplies capture; NumPy and the small native `soxr` library provide safe stereo downmixing and stateful resampling from 44.1/48 kHz to 16 kHz. They perform signal conversion only, not AI inference. The resampler avoids audioop, which is unavailable in Python 3.13. `.venv` isolates all installed dependencies. `requirements.txt` lists direct runtime packages; `requirements-dev.txt` adds tests; `requirements.lock.txt` records the complete tested installation.
 
-## Live session safety
+## Free-only live sessions
 
-The app starts in **LOCAL-ONLY** mode. Opening a page, using the CV and profile tools, preparing an interview, calculating an estimate, and testing audio make no requests to AssemblyAI or Groq.
+The app starts in **LOCAL-ONLY** mode. CVs, profile editing, interview preparation, local mock interviews, image text extraction and audio tests make no AssemblyAI or Groq requests.
 
-To authorise one live session, select two distinct audio inputs, choose a duration, and enter a maximum transcription estimate in UGX. The duration defaults to **5 minutes**. `MAX_SESSION_MINUTES` is the optional server-side ceiling (120 minutes by default). The app starts its deadline before the first provider call, including connection setup.
+**FREE USAGE ONLY** keeps maximum user payment at **UGX 0**. The app distinguishes gross provider usage from free-credit consumption and expected payment. A non-zero gross amount can be covered by free allowances. Exchange rates are optional and never required for a fully covered free session.
 
-The quote uses AssemblyAI's published Universal-Streaming English rate of **US$0.15 per audio channel-hour**, checked **11 November 2026**. Optional keyterms are off by default and add **US$0.04 per channel-hour** when enabled. Multiply the per-channel rate by two streams and the session minutes divided by 60. Five minutes costs an estimated **US$0.025** at the base rate or about **US$0.0317** with keyterms. The UGX estimate uses the exchange rate you enter and rounds up to a whole shilling. The estimate assumes both streams run for the entire selected duration and excludes Groq, taxes, conversion fees and any billing after disconnect. [AssemblyAI pricing](https://www.assemblyai.com/pricing)
+### What to check in your accounts
 
-Enter a checked UGX-per-USD rate with its source and date. Exchange rates older than seven days, future dates and missing conversion information block live sessions. The published pricing snapshot expires after 30 days and must be refreshed from the provider in `app/cost.py` before the app allows new sessions. If an estimate cannot be calculated, the app displays **COST UNKNOWN — LIVE SESSION BLOCKED**. The default **UGX 0** cap blocks all non-zero estimates, even when credits may be available.
+Use the account or organisation attached to the configured API key. Check this yourself in the dashboard before each session.
 
-Check billing status, any free allowance and remaining credits in **both** provider dashboards, then confirm those checks in the app. The app does not verify account billing and does not assume free access. The app also requires configured API keys, a fresh single-use quote within your limit, and a separate confirmation for the specific live session. The server checks the same inputs again before calling either provider.
+* AssemblyAI must be an **unupgraded free trial**. Check the remaining promotional credit, the exact account rate for `universal-streaming-english` and any enabled keyterm surcharge. Verify that the credit covers both simultaneous streams and the selected features. Confirm there is no payment method, auto-pay, invoice agreement or route to paid credit. The app blocks upgraded and billable plans. [AssemblyAI account and billing documentation](https://www.assemblyai.com/docs/faq/how-to-get-your-api-key)
+* Groq must be on the **Free plan** for the selected model. Check its remaining daily token and request quotas, shorter rate limits and the reset time. Confirm there is no paid plan, auto-reload or invoicing arrangement. Groq documents downgrading under **Settings → Billing**, which may first require payment of outstanding Developer-plan usage. A Developer-plan spending limit alone cannot establish zero-charge protection because its spend tracking is delayed. Promotional credits on billable plans are also blocked. [Groq billing FAQs](https://console.groq.com/docs/billing-faqs), [spend limits](https://console.groq.com/docs/spend-limits), [rate limits](https://console.groq.com/docs/rate-limits)
 
-**STOP ALL**, the backend deadline, provider failure, browser disconnection, missing browser heartbeats for 15 seconds, and graceful backend shutdown cancel pending answer requests and stop both audio sources and AssemblyAI connections. The app clears session-only data and returns to local-only mode. AssemblyAI handshakes and Groq requests have zero automatic retries. Reconnecting the browser restores the local interface without resuming a provider session.
+Enter each current balance and its dashboard or support reference in **Live session safety**, then check the confirmation boxes. Set a date/time through which both allowances will remain available, including 30 seconds after the session. Reserve the balances for this interview by pausing other applications and organisation members' use of them. Keep billing settings fixed during the session. Confirmations must be no more than 15 minutes old and are cleared when a session ends. No account balance, payment method or billing tier is inferred from the API key.
 
-The cap is an estimate used for admission. The app cannot enforce provider billing, guarantee cancellation of a request already received by Groq, or guarantee that a broken network lets the provider receive termination. Account dashboards and provider-side limits are authoritative.
+The app does not read balances through a billing API. These fields represent your account-specific confirmation. The application cannot prevent someone upgrading the organisation elsewhere or make promises about a provider's billing system. If you cannot establish that the provider account cannot bill, keep the session blocked.
+
+### Reservation calculation
+
+Both audio sources use separate AssemblyAI Streaming v3 connections. Let `r` be your confirmed USD per channel-hour rate including optional keyterms. Gross transcription usage is `r × 2 × minutes / 60`. Required free-credit coverage is `r × 2 × (minutes × 60 + 30) / 3600 × 1.25`. This adds a 25% margin and a 30-second shutdown allowance. For illustration only, if your account shows a base rate of US$0.15, five minutes has US$0.025 gross usage and needs US$0.034375 free credit reserved. Your actual rate must come from the account. Current public pricing no longer lists the app's legacy English model, so the app does not reuse its earlier public price automatically.
+
+Groq defaults to at most **three answers** per session. You can deliberately change that bound before authorising. Each answer reserves **32,768 input tokens and 2,000 output/reasoning tokens**. The app checks a conservative UTF-8 byte-based input bound before sending. It reserves a further **25% token margin**, and **25% more requests than the answer count plus one metadata-access check**. For three answers this reserves **130,380 tokens and five requests**. Groq gross usage is calculated separately using the published prices for the configured GPT-OSS 20B or 120B model. Both currently supported gross price schedules were checked on 19 November 2026. Other models require a verified price schedule before admission. [Groq model prices](https://console.groq.com/docs/models)
+
+The app reserves before requesting and does not refund reservations after failure or cancellation. Once the chosen answer bound has been consumed, another answer request stops the session and asks you to reconfirm current balances. Provider free-plan rate limits can also interrupt a session even when daily quota is sufficient. Quota, credit and access failures stop the session without retries or a paid fallback. The app tracks its local reservations rather than claiming they are live provider balances.
+
+### Starting and stopping
+
+The selected duration defaults to **five minutes**. `MAX_SESSION_MINUTES` remains an optional server-side ceiling of 120 minutes. The deadline starts before the first provider request, includes connection setup, and is enforced by the backend. Sufficient free coverage for both providers, protected account types, current confirmation, configured keys, two distinct input devices and explicit consent to a fresh single-use quote are required.
+
+**STOP ALL**, the deadline, exhausted reservations, provider failure, laptop-browser disconnection, missing laptop heartbeats for 15 seconds and graceful backend shutdown stop capture and close provider connections. Pending Groq generation is cancelled where supported and temporary interview data is cleared. Reopening the page does not resume a live session. Local tools remain available.
+
+All free balances and zero-charge billing protection for the user's actual accounts are **unverified by the application** until the user establishes them. The app can enforce its admission, request and time bounds. Only provider-side account protections can prevent actual charges independently. In-flight usage, delayed metering, network or power failure and external changes to account billing can exceed a local estimate. The free-only path can be used when an unupgraded AssemblyAI trial and Groq Free organisation with adequate confirmed balances are established. It does not convert a billable account into a free one.
 
 ## Installation/recovery
 

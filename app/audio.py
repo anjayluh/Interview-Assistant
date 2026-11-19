@@ -24,11 +24,17 @@ class Capture:
         self.last_audio = time.monotonic()
         self.level = 0.0
         self.level_at = 0.0
+        self.name = ''
+        self.callback_count = 0
+        self.frame_count = 0
+        self.peak_level = 0.0
         self.pending = bytearray()
 
     def callback(self, data, frames, timing, status):
         if self.closed:
             return
+        self.callback_count += 1
+        self.frame_count += frames
         if status:
             self.overflow = True
         try:
@@ -40,6 +46,7 @@ class Capture:
         info = sd.query_devices(self.device, 'input')
         if info['max_input_channels'] < 1:
             raise ValueError('Selected device has no input channels.')
+        self.name = info['name']
         self.rate = int(info['default_samplerate'])
         self.channels = min(2, int(info['max_input_channels']))
         sd.check_input_settings(device=self.device, channels=self.channels, dtype='int16', samplerate=self.rate)
@@ -57,6 +64,7 @@ class Capture:
         x = np.frombuffer(raw, dtype='<i2').reshape(-1, self.channels).astype(np.float32)
         x = x.mean(axis=1) / 32768.0
         self.level = float(np.sqrt(np.mean(x * x))) if len(x) else 0
+        self.peak_level = max(self.peak_level, self.level)
         if self.resampler:
             x = self.resampler.resample_chunk(x)
         return (np.clip(x, -1, 32767 / 32768) * 32768).astype('<i2').tobytes()
@@ -98,3 +106,15 @@ class Capture:
                     self.queue.get_nowait()
                 except queue.Empty:
                     break
+
+
+def capture_error(exc):
+    """Expose local driver errors without request data or provider credentials."""
+    if isinstance(exc, sd.PortAudioError):
+        codes = [str(arg) for arg in exc.args if isinstance(arg, int)]
+        # PortAudio's first argument describes the failed local device operation.
+        message = str(exc.args[0])[:220] if exc.args else 'PortAudio failed.'
+        return message + (' (code ' + ', '.join(codes) + ')' if codes else '')
+    if isinstance(exc, (ValueError, RuntimeError)):
+        return str(exc)[:220]
+    return type(exc).__name__ + ' while accessing the audio device.'

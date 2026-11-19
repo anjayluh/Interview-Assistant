@@ -43,7 +43,12 @@ class Transcriber:
         self.failed = True
         self.ready.set()
         if not self.closing:
-            self.on_error('AssemblyAI connection failed. Check credentials, credits and network; restart manually.')
+            code = getattr(event, 'code', None)
+            message = str(getattr(event, 'message', '')).lower()
+            if code in (402, 429) or any(word in message for word in ('balance', 'credit', 'quota', 'billing')):
+                self.on_error('AssemblyAI free allowance exhausted or billing access rejected. Session stopped; paid fallback is blocked.')
+            else:
+                self.on_error('AssemblyAI connection failed. Free-only session stopped. Check access and connectivity before reconfirming balances.')
 
     def _terminated(self, client, event):
         if not self.closing:

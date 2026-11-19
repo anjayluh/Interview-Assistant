@@ -2,12 +2,12 @@ import asyncio
 import json
 import time
 from collections import deque
-from .audio import Capture
+from .audio import Capture, capture_error
 from .answers import Answers
 from .questions import QuestionGate, is_question
 from .profile import InterviewContext, terms
 from .transcription import Transcriber
-from .cost import DEFAULT_MINUTES, LiveOptions, quote
+from .cost import DEFAULT_MINUTES, FreeSessionBudget, LiveOptions, quote
 
 class Session:
     def __init__(self, settings, emit, capture_factory=Capture, transcriber_factory=Transcriber, answers=None):
@@ -35,13 +35,20 @@ class Session:
         self.interview = None
         self.usage_rate = 0.0
         self.limit_minutes = DEFAULT_MINUTES
+        self.free_budget = None
         self.deadline = None
         self.reason = 'Local-only mode. Live services require authorisation for each session.'
         self.latest = ''
+        self.audio_diagnostics = deque(maxlen=24)
         self.testing = False
         self.generation = 0
         self.last_final_at = 0
         self.pending_questions = deque(maxlen=6)
+
+    def diagnose_audio(self, role, stage, message):
+        item = {'role': role, 'stage': stage, 'message': message}
+        self.audio_diagnostics.append(item)
+        self.emit({'type': 'audio_diagnostic', **item})
 
     async def open_capture(self, cap):
         task = asyncio.create_task(asyncio.to_thread(cap.open))
@@ -58,6 +65,8 @@ class Session:
         return {'type': 'state', 'state': self.state, 'reason': self.reason,
                 'duration': duration, 'channel_seconds': usage,
                 'estimate': usage / 3600 * self.usage_rate,
+                'audio_diagnostics': list(self.audio_diagnostics),
+                'free_usage': self.free_budget.public() if self.free_budget else None,
                 'active_channels': len(self.opened_at), 'testing': self.testing, 'sources': list(self.captures),
                 'model': self.settings.model, 'max_minutes': self.settings.max_minutes,
                 'limit_minutes': self.limit_minutes, 'rate_usd': self.usage_rate,
@@ -69,7 +78,7 @@ class Session:
             if self.state != 'idle':
                 raise ValueError('Stop the current session or audio test first.')
             interview = interview or InterviewContext()
-            pricing = quote(options or LiveOptions(), interview.setup.keyterms, self.settings.max_minutes)
+            pricing = quote(options or LiveOptions(), interview.setup.keyterms, self.settings.max_minutes, self.settings.model)
             pricing.require_authorisation()
             if mic == system:
                 raise ValueError('Choose different microphone and system audio devices.')
@@ -85,6 +94,8 @@ class Session:
             self.start_task = asyncio.current_task()
             self.limit_minutes = pricing.options.minutes
             self.usage_rate = float(pricing.channel_rate)
+            self.free_budget = FreeSessionBudget(pricing)
+            self.answers.free_only = True
             self.started = time.monotonic()
             self.deadline = asyncio.get_running_loop().time() + self.limit_minutes * 60
             self.elapsed = self.channel_seconds = 0
@@ -99,6 +110,7 @@ class Session:
                 for role in self.captures:
                     self.tasks.append(asyncio.create_task(self.pump(role)))
                 self.tasks.append(asyncio.create_task(self.watchdog(self.deadline)))
+                self.tasks.append(asyncio.create_task(self.watch_free_coverage()))
                 self.emit(self.snapshot())
             except TimeoutError:
                 await self._cleanup('Maximum session duration reached during startup.')
@@ -153,6 +165,17 @@ class Session:
     async def watchdog(self, deadline):
         await asyncio.sleep(max(0, deadline - asyncio.get_running_loop().time()))
         await self.stop('Maximum session duration reached.')
+
+    async def watch_free_coverage(self):
+        while self.state == 'running':
+            await asyncio.sleep(1)
+            if not self.free_budget:
+                return
+            now = time.monotonic()
+            estimate = (self.channel_seconds + sum(now - start for start in self.opened_at.values())) / 3600 * self.usage_rate
+            if estimate >= float(self.free_budget.assembly_reserved_usd):
+                await self.stop('AssemblyAI reserved free-credit budget exhausted. Local-only mode.')
+                return
 
     def fatal(self, message):
         if self.state in ('running', 'starting') and (not self.fatal_task or self.fatal_task.done()):
@@ -222,12 +245,15 @@ class Session:
             }, ensure_ascii=False)
             self.emit({'type': 'groq', 'status': 'generating'})
             try:
+                if self.free_budget:
+                    self.free_budget.reserve_answer()
                 async with asyncio.timeout_at(self.deadline):
                     suggestion = await self.answers.generate(context, self.length)
                 item = {'type': 'answer', 'question': question, **suggestion}
                 self.suggestions.append(item)
                 self.emit(item)
                 self.emit({'type': 'groq', 'status': 'ready'})
+                self.emit(self.snapshot())
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -240,28 +266,55 @@ class Session:
                 raise ValueError('Stop the current session or audio test first.')
             self.state, self.testing = 'testing', True
             self.reason = f'Testing {role} locally for 10 seconds. No cloud API calls.'
-            cap = self.capture_factory(device)
-            self.captures[role] = cap
+            self.diagnose_audio(role, 'opening', f'Backend received test for device ID {device}; opening input.')
+            self.emit(self.snapshot())
             try:
+                cap = self.capture_factory(device)
+                self.captures[role] = cap
                 await self.open_capture(cap)
+                name = getattr(cap, 'name', '') or f'device {device}'
+                self.diagnose_audio(role, 'opened',
+                    f'{name}; {getattr(cap, "rate", "?")} Hz, {getattr(cap, "channels", "?")} input channel(s). Waiting for audio frames.')
                 self.tasks.append(asyncio.create_task(self.test_pump(role)))
                 self.emit(self.snapshot())
-            except BaseException:
-                await self._cleanup('Audio test failed.')
+            except asyncio.CancelledError:
+                self.diagnose_audio(role, 'cancelled', 'Audio test cancelled while opening the input.')
+                await self._cleanup('Audio test cancelled.')
                 raise
+            except Exception as exc:
+                detail = capture_error(exc)
+                self.diagnose_audio(role, 'error', detail)
+                await self._cleanup('Audio test failed: ' + detail)
+                raise ValueError('Audio test failed: ' + detail) from None
 
     async def test_pump(self, role):
+        cap = self.captures[role]
+        received = False
         try:
             async with asyncio.timeout(10):
-                async for chunk in self.captures[role].chunks():
+                async for chunk in cap.chunks():
+                    if not received:
+                        received = True
+                        self.diagnose_audio(role, 'receiving', 'Audio frames received. Speak or play sound to check signal level.')
                     self.level(role)
         except TimeoutError:
             pass
         except asyncio.CancelledError:
+            self.diagnose_audio(role, 'cancelled', 'Audio test stopped before completion.')
             raise
-        except Exception:
-            self.emit({'type': 'error', 'message': 'Audio test failed. Check device access and macOS permissions.'})
-        await self.stop('Audio test finished.')
+        except Exception as exc:
+            self.diagnose_audio(role, 'error', capture_error(exc))
+            self.emit({'type': 'error', 'message': 'Audio test failed: ' + capture_error(exc)})
+            await self.stop('Audio test failed. See Audio diagnostics.')
+            return
+        peak = getattr(cap, 'peak_level', cap.level)
+        signal = 'Signal detected.' if peak > .001 else 'Frames arrived but the signal was silent or very quiet.'
+        if not received:
+            signal = 'No audio frames arrived.'
+        self.diagnose_audio(role, 'finished',
+            f'{signal} Callbacks: {getattr(cap, "callback_count", "?")}; '
+            f'frames: {getattr(cap, "frame_count", "?")}; peak RMS: {peak:.5f}.')
+        await self.stop('Audio test finished. See Audio diagnostics.')
 
     async def stop(self, reason='Stopped.'):
         # Cancel startup before waiting for its lock, including a connection in progress.
@@ -289,6 +342,7 @@ class Session:
         self.final_keys.clear()
         self.gate = QuestionGate()
         self.interview = None
+        self.free_budget = None
         self.deadline = None
         self.started = None
         # Stop local capture and terminate both provider streams concurrently.

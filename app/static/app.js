@@ -4,11 +4,64 @@ let socket, retry = 0, timer, elapsed = 0, usage = 0, rate = .15, running = fals
 let currentState = 'idle';
 let quoteData, quoteTimer, quoteRequest = 0, heartbeat;
 let keysReady = false;
-const safetyFields = ['live-minutes', 'live-cap', 'live-fx', 'live-fx-date', 'live-fx-source',
-                      'live-assembly-check', 'live-groq-check', 'keyterms'];
+const safetyFields = ['live-minutes', 'live-cap', 'live-answers', 'live-fx', 'live-fx-date', 'live-fx-source',
+  'live-assembly-check', 'live-groq-check', 'keyterms', 'free-assembly-plan', 'free-assembly-usd',
+  'free-assembly-rate', 'free-assembly-keyterms', 'free-assembly-source', 'free-assembly-protected',
+  'free-groq-plan', 'free-groq-tokens', 'free-groq-requests', 'free-groq-source', 'free-groq-protected',
+  'free-valid-until', 'free-exclusive', 'free-confirm-now'];
+let balancesCheckedAt = null;
 let interviewRan = false;
 const client = sessionStorage.iaClient || (sessionStorage.iaClient = crypto.randomUUID());
 const rows = new Map();
+let audioAckTimer;
+const audioDiagnostics = [];
+let showAudioDiagnostics = false;
+function hideAudioDiagnostics() {
+  showAudioDiagnostics = false;
+  clearTimeout(audioAckTimer);
+  audioDiagnostics.length = 0;
+  $('audio-diagnostic-log').replaceChildren();
+  $('audio-diagnostic-summary').textContent = '';
+  $('audio-diagnostics').open = false;
+  $('audio-diagnostics').hidden = true;
+}
+function audioDiagnostic(item) {
+  if (!showAudioDiagnostics || !idleMode(currentState)) return;
+  clearTimeout(audioAckTimer);
+  const role = item.role === 'me' ? 'Microphone' : 'System audio';
+  audioDiagnostics.push(item);
+  while (audioDiagnostics.length > 24) audioDiagnostics.shift();
+  $('audio-diagnostic-log').replaceChildren(...audioDiagnostics.map(entry => {
+    const row = document.createElement('li');
+    row.textContent = (entry.role === 'me' ? 'Microphone' : 'System audio')
+      + ' · ' + entry.stage + ' · ' + entry.message;
+    return row;
+  }));
+  $('audio-diagnostic-summary').textContent = role + ' · ' + item.stage;
+  if (item.stage === 'error') {
+    $('audio-diagnostics').open = true;
+    $(item.role === 'me' ? 'status-me' : 'status-interviewer').textContent = 'Test failed — see Audio diagnostics';
+  }
+}
+function testAudio(role, selectId) {
+  const select = $(selectId);
+  const device = select.value;
+  const name = select.selectedOptions[0]?.textContent || 'No device selected';
+  showAudioDiagnostics = true;
+  audioDiagnostics.length = 0;
+  $('audio-diagnostic-log').replaceChildren();
+  $('audio-diagnostic-summary').textContent = role === 'me' ? 'Microphone' : 'System audio';
+  $('audio-diagnostics').hidden = false;
+  $('audio-diagnostics').open = true;
+  $('audio-browser-status').textContent = 'Test clicked for ' + name
+    + '. Local connection: ' + (socket?.readyState === WebSocket.OPEN ? 'connected' : 'disconnected') + '.';
+  if (device === '') return error('Select an input device first.');
+  clearTimeout(audioAckTimer);
+  audioAckTimer = setTimeout(() => {
+    $('audio-browser-status').textContent += ' Backend has not acknowledged this test. Check the local connection and reload this tab.';
+  }, 2000);
+  command({cmd: 'test', role, device: Number(device)});
+}
 function error(message) { $('error').textContent = message; $('error').hidden = false; }
 function command(data) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return error('Local connection is unavailable. Reconnecting…');
@@ -17,7 +70,19 @@ function command(data) {
 }
 function buttons() {
   const idle = currentState === 'idle', ready = connected && idle;
-  $('start').disabled = !ready || !keysReady || !quoteData?.quote_id || !$('mic').value || !$('system').value;
+  const reasons = [];
+  if (!connected) reasons.push('Connect to the local backend.');
+  if (!idle) reasons.push(currentState === 'testing' ? 'Wait for the audio test to finish, or press STOP ALL.' : 'A session is already active.');
+  if (!keysReady) reasons.push('Configure both API keys and restart the backend.');
+  if (!$('mic').value || !$('system').value) reasons.push('Select both audio inputs.');
+  else if ($('mic').value === $('system').value) reasons.push('Select different microphone and system audio inputs.');
+  if (!quoteData?.quote_id) {
+    reasons.push(...(quoteData?.blockers?.length ? quoteData.blockers
+      : ['Review Live session safety to obtain a current cost estimate and complete the billing checks.']));
+  }
+  $('start').disabled = reasons.length > 0;
+  $('start-blocker').textContent = idle ? reasons.join(' ') : reasons[0];
+  $('review-safety').hidden = !idle || Boolean(quoteData?.quote_id);
   $('test-mic').disabled = !ready || !$('mic').value;
   $('test-system').disabled = !ready || !$('system').value;
   $('stop').disabled = idle;
@@ -33,28 +98,46 @@ function clock() {
 }
 function idleMode(mode) { return mode === 'idle' || mode === 'testing'; }
 function state(s) {
-  currentState = s.state; running = s.state === 'running'; elapsed = s.duration; usage = s.channel_seconds;
+  currentState = s.state;
+  if (!idleMode(s.state)) hideAudioDiagnostics();
+  running = s.state === 'running'; elapsed = s.duration; usage = s.channel_seconds;
   if (running || s.state === 'starting') interviewRan = true;
   if (currentState === 'idle' && interviewRan) {
     interviewRan = false;
     document.dispatchEvent(new Event('interview-ended'));
-    $('live-assembly-check').checked = $('live-groq-check').checked = false;
+    $('live-assembly-check').checked = $('live-groq-check').checked = $('free-confirm-now').checked = false;
+    balancesCheckedAt = null;
     refreshQuote();
   }
   keysReady = Boolean(s.configured.assemblyai && s.configured.groq);
-  $('live-mode').textContent = idleMode(s.state) ? 'LOCAL-ONLY' : 'LIVE SESSION';
+  $('live-mode').textContent = idleMode(s.state) ? 'LOCAL-ONLY' : 'FREE USAGE ONLY';
   $('live-minutes').max = s.max_minutes;
   rate = s.rate_usd || 0;
+  $('free-session-usage').hidden = !s.free_usage;
+  $('free-session-usage').textContent = s.free_usage
+    ? 'Free session answer budget remaining: ' + s.free_usage.remaining_answers
+      + '. Expected user payment UGX 0. Remaining token and request reservations are local estimates.'
+    : '';
   clearInterval(timer);
   if (running) timer = setInterval(() => { elapsed++; usage += s.active_channels; clock(); }, 1000);
-  $('notice').textContent = s.reason;
+  $('notice').textContent = s.reason + (s.free_usage ? ' · ' + s.free_usage.remaining_answers + ' reserved free answers remaining · expected payment UGX 0' : '');
   $('length').value = s.length;
   $('limit').textContent = `Session limit: ${idleMode(s.state) ? $('live-minutes').value : s.limit_minutes} min`;
   $('assembly').textContent = `AssemblyAI: ${s.configured.assemblyai ? (running ? '2 streams connected' : s.state === 'starting' ? 'connecting…' : 'disconnected') : 'key missing'}`;
   $('groq').textContent = `Groq: ${s.configured.groq ? (s.groq_verified ? 'model verified' : 'not checked') : 'key missing'} · ${s.model}`;
   for (const role of ['me','interviewer']) {
-    $(`status-${role}`).textContent = running ? 'Capturing' : s.testing && s.sources.includes(role) ? 'Local test active' : 'Not capturing';
+    const diagnostic = (showAudioDiagnostics ? s.audio_diagnostics || [] : []).filter(item => item.role === role).at(-1);
+    const label = diagnostic?.stage === 'error' ? 'Test failed — see Audio diagnostics'
+      : diagnostic?.stage === 'finished' ? 'Test finished — see Audio diagnostics'
+      : 'Not capturing';
+    $(`status-${role}`).textContent = running ? 'Capturing'
+      : s.testing && diagnostic?.stage === 'opening' ? 'Opening input…'
+      : s.testing && s.sources.includes(role) ? 'Local test active' : label;
     if (!running && !s.testing) $(`level-${role}`).value = 0;
+  }
+  for (const item of showAudioDiagnostics ? s.audio_diagnostics || [] : []) {
+    if (!audioDiagnostics.some(existing => existing === item ||
+      JSON.stringify(existing) === JSON.stringify(item))) audioDiagnostic(item);
   }
   buttons(); clock();
 }
@@ -96,8 +179,9 @@ function connect() {
     else if (x.type === 'state') state(x);
     else if (x.type === 'transcript') transcript(x);
     else if (x.type === 'answer') answer(x);
+    else if (x.type === 'audio_diagnostic') audioDiagnostic(x);
     else if (x.type === 'level') $(`level-${x.role}`).value = x.value;
-    else if (x.type === 'error') { error(x.message); if (currentState === 'idle') refreshQuote(); }
+    else if (x.type === 'error') { clearTimeout(audioAckTimer); error(x.message); if (currentState === 'idle') refreshQuote(); }
     else if (x.type === 'clear') clear();
     else if (x.type === 'groq') { $('groq').textContent = `Groq: ${x.status}`; $('answer').disabled = x.status === 'generating' || currentState !== 'running'; }
   };
@@ -127,42 +211,62 @@ async function refresh() {
   } catch { error('Unable to list devices. Check the backend and reload.'); }
 }
 function liveOptions() {
+  const number = id => $(id).value === '' ? null : $(id).valueAsNumber;
+  const until = $('free-valid-until').value;
   return {
-    minutes: $('live-minutes').valueAsNumber,
-    cap_ugx: $('live-cap').valueAsNumber,
-    fx_ugx_per_usd: $('live-fx').value || null,
-    fx_date: $('live-fx-date').value || null,
+    minutes: $('live-minutes').valueAsNumber, cap_ugx: 0,
+    max_answers: $('live-answers').valueAsNumber,
+    fx_ugx_per_usd: $('live-fx').value || null, fx_date: $('live-fx-date').value || null,
     fx_source: $('live-fx-source').value,
     assembly_billing_checked: $('live-assembly-check').checked,
     groq_billing_checked: $('live-groq-check').checked,
+    free: {
+      assembly_credits_usd: $('free-assembly-usd').value || null,
+      assembly_hourly_usd: $('free-assembly-rate').value || null,
+      assembly_keyterms_usd: $('free-assembly-keyterms').value || null,
+      assembly_plan: $('free-assembly-plan').value,
+      assembly_no_paid_fallback: $('free-assembly-protected').checked,
+      assembly_source: $('free-assembly-source').value,
+      groq_plan: $('free-groq-plan').value,
+      groq_remaining_requests: number('free-groq-requests'),
+      groq_remaining_tokens: number('free-groq-tokens'),
+      groq_no_paid_fallback: $('free-groq-protected').checked,
+      groq_source: $('free-groq-source').value,
+      checked_at: $('free-confirm-now').checked ? balancesCheckedAt : null,
+      valid_until: until ? new Date(until).toISOString() : null,
+      exclusive_balances: $('free-exclusive').checked,
+    },
   };
 }
 function showQuote(data) {
   quoteData = data;
-  const cost = $('live-quote');
-  const unknown = data?.total_ugx == null;
-  const published = data?.hourly_usd
-    ? `US$${data.hourly_usd}/hour for ${data.channels} streams · US$${data.total_usd} for ${data.minutes} min · `
-      + `US$${data.base_per_channel_hour_usd} base + US$${data.keyterms_per_channel_hour_usd} keyterms per channel-hour`
-    : '';
-  cost.textContent = [unknown ? 'COST UNKNOWN — LIVE SESSION BLOCKED' : `Estimated UGX ${data.total_ugx.toLocaleString()}`,
-    published].filter(Boolean).join(' · ');
-  cost.classList.toggle('safety-warning', unknown);
-  $('live-price-date').textContent = data ? `· checked ${data.pricing_date} · published in ${data.currency}` : '';
-  const options = liveOptions();
-  $('live-billing').textContent = [
-    `AssemblyAI billing and credits: ${options.assembly_billing_checked ? 'checked by you' : 'unknown'}.`,
-    `Groq billing and credits: ${options.groq_billing_checked ? 'checked by you' : 'unknown'}.`,
-    'The app does not verify either account’s billing or free allowance.',
-  ].join(' ');
-  $('live-billing').classList.toggle('safety-warning', !options.assembly_billing_checked || !options.groq_billing_checked);
-  const reasons = data?.blockers || ['Review the duration, cap and exchange rate to obtain an estimate.'];
-  $('live-blockers').replaceChildren(...reasons.filter(reason => !reason.startsWith('COST UNKNOWN')).map(reason => {
+  const covered = data?.expected_payment_ugx === 0;
+  const details = data ? [
+    'AssemblyAI gross usage USD ' + (data.total_usd ?? 'unknown')
+      + '; free-credit reserve USD ' + (data.assembly_reserved_usd ?? 'unknown')
+      + '; confirmed available USD ' + (data.assembly_available_usd ?? 'unknown') + '.',
+    'Groq gross usage estimate USD ' + (data.groq_gross_usd ?? 'unknown')
+      + '; reserve ' + data.groq_reserved_tokens + ' tokens and ' + data.groq_reserved_requests
+      + ' requests for up to ' + data.max_answers + ' answers. Confirmed available: '
+      + (data.groq_available_tokens ?? 'unknown') + ' tokens, ' + (data.groq_available_requests ?? 'unknown') + ' requests.',
+    ...(data.gross_transcription_ugx_reference == null ? [] : [
+      'Optional gross transcription reference UGX ' + data.gross_transcription_ugx_reference
+        + '; the free-only expected payment is assessed separately.']),
+    covered ? 'Expected user payment UGX 0. Both free allowances cover the reserved session.'
+      : 'Expected payment cannot be confirmed as UGX 0. Live session blocked.',
+  ] : ['Free allowance details incomplete — live session blocked.'];
+  $('live-quote').textContent = details.join(' ');
+  $('live-quote').classList.toggle('safety-warning', !covered);
+  $('live-price-date').textContent = data ? '· checked ' + data.pricing_date + ' · USD prices; AssemblyAI rate supplied by you' : '';
+  $('live-billing').textContent = data?.account_verification
+    || 'Free balances and zero-billing protection have not been confirmed for both providers.';
+  const reasons = data?.blockers || ['Confirm each provider’s free balance and zero-billing protection.'];
+  $('live-blockers').replaceChildren(...reasons.map(reason => {
     const item = document.createElement('li');
     item.textContent = reason;
     return item;
   }));
-  if (currentState === 'idle') $('limit').textContent = `Session limit: ${$('live-minutes').value || '—'} min`;
+  if (currentState === 'idle') $('limit').textContent = 'Session limit: ' + ($('live-minutes').value || '—') + ' min';
   buttons();
 }
 async function refreshQuote() {
@@ -184,6 +288,12 @@ async function refreshQuote() {
 }
 for (const id of safetyFields) {
   $(id).addEventListener('input', () => {
+    if (id === 'free-confirm-now') {
+      balancesCheckedAt = $(id).checked ? new Date().toISOString() : null;
+    } else if (!['live-fx', 'live-fx-date', 'live-fx-source'].includes(id)) {
+      $('free-confirm-now').checked = false;
+      balancesCheckedAt = null;
+    }
     ++quoteRequest;
     showQuote(null);
     clearTimeout(quoteTimer);
@@ -194,16 +304,24 @@ $('start').onclick = async () => {
   $('start').disabled = true;
   const data = await refreshQuote();
   if (!data?.quote_id || currentState !== 'idle' || !connected) return;
+  const consentOptions = liveOptions();
+  const consentKeyterms = $('keyterms').checked;
+  const consentFingerprint = JSON.stringify({live: consentOptions, keyterms: consentKeyterms});
   if (!window.confirm(
-    `Authorise this ${data.minutes}-minute live session?
-
-AssemblyAI will receive both audio streams. `
-    + `Estimated transcription cost: US$${data.total_usd} (UGX ${data.total_ugx.toLocaleString()}). `
-    + 'Groq will receive relevant interview context and may charge separately. '
-    + 'The transcription cap is a local estimate and cannot limit your provider bill.'
+    'Start this ' + data.minutes + '-minute FREE USAGE ONLY session? '
+    + 'Expected user payment UGX 0, based on the balances and non-billable account protections you confirmed. '
+    + 'AssemblyAI reserves USD ' + data.assembly_reserved_usd + ' of free credit for both audio streams. '
+    + 'Groq reserves ' + data.groq_reserved_tokens + ' free tokens and '
+    + data.groq_reserved_requests + ' requests for at most ' + data.max_answers + ' answers. '
+    + 'Provider billing state is controlled by the providers. Do not change the confirmed account settings during this session.'
   )) return;
+  if (consentFingerprint !== JSON.stringify({live: liveOptions(), keyterms: $('keyterms').checked})) {
+    showQuote(null);
+    return error('Free allowance settings changed. Review the estimate again.');
+  }
+  hideAudioDiagnostics();
   command({cmd: 'start', mic: Number($('mic').value), system: Number($('system').value),
-    length: $('length').value, quote_id: data.quote_id, live: {...liveOptions(), confirmed: true},
+    length: $('length').value, quote_id: data.quote_id, live: {...consentOptions, confirmed: true},
     interview: {
       cv_id: $('interview-cv').dataset.loaded ? $('interview-cv').value : null,
       title: $('job-title').value, company: $('job-company').value, description: $('job-description').value,
@@ -219,11 +337,16 @@ $('stop').onclick = async () => {
     command({cmd: 'stop'});
   }
 };
-$('test-mic').onclick = () => command({cmd:'test',role:'me',device:Number($('mic').value)});
-$('test-system').onclick = () => command({cmd:'test',role:'interviewer',device:Number($('system').value)});
+$('test-mic').onclick = () => testAudio('me', 'mic');
+$('test-system').onclick = () => testAudio('interviewer', 'system');
 $('answer').onclick = () => command({cmd:'answer'});
 $('clear').onclick = () => command({cmd:'clear'});
 $('length').onchange = () => command({cmd:'length',length:$('length').value});
 $('mic').onchange = $('system').onchange = buttons;
 $('refresh').onclick = refresh;
+$('review-safety').onclick = () => {
+  const panel = document.querySelector('.safety-panel');
+  panel.open = true;
+  panel.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+};
 connect(); refresh(); refreshQuote();

@@ -1,6 +1,7 @@
 import json
 
 from groq import AsyncGroq
+from .cost import MAX_INPUT_TOKENS, MAX_OUTPUT_TOKENS
 
 CATEGORIES = (
     'Behavioural', 'Professional background', 'Technical concept', 'Coding / algorithm',
@@ -118,6 +119,7 @@ class Answers:
     def __init__(self, settings, client=None):
         self.settings = settings
         self.client = client
+        self.free_only = False
         self.verified = False
 
     def get_client(self):
@@ -128,7 +130,12 @@ class Answers:
         return self.client
 
     async def verify(self):
-        models = await self.get_client().models.list()
+        try:
+            models = await self.get_client().models.list()
+        except Exception as exc:
+            if getattr(exc, 'status_code', None) in (402, 403, 429):
+                raise ValueError('Groq free allowance or access is unavailable. Session stopped without retry or paid fallback.') from None
+            raise
         if self.settings.model not in {m.id for m in models.data}:
             raise ValueError('GROQ_MODEL is unavailable for this account. Choose an accessible model in .env; no substitution was made.')
         self.verified = True
@@ -145,11 +152,29 @@ class Answers:
                 'name': 'interview_answer', 'strict': True, 'schema': SCHEMA}}
         rules = (RULES + f'\nTarget roughly {words} spoken words. '
                  f'Categories: {", ".join(CATEGORIES)}. Experience labels: {", ".join(EXPERIENCE)}.')
-        reply = await self.get_client().chat.completions.create(
-            model=model, messages=[{'role': 'system', 'content': rules},
-                                   {'role': 'user', 'content': context}],
-            response_format=format_options, max_completion_tokens=tokens, temperature=0.4,
-            **({'reasoning_effort': 'low'} if gpt_oss else {}))
+        messages = [{'role': 'system', 'content': rules}, {'role': 'user', 'content': context}]
+        # Budget one token per UTF-8 byte plus framing/schema overhead, without a tokenizer download.
+        input_bound = len(json.dumps({'messages': messages, 'schema': SCHEMA}, ensure_ascii=False).encode('utf-8')) + 1024
+        if self.free_only and (input_bound > MAX_INPUT_TOKENS or tokens > MAX_OUTPUT_TOKENS):
+            raise ValueError('Groq request exceeds the reserved free-token budget. Shorten the interview context.')
+        try:
+            reply = await self.get_client().chat.completions.create(
+                model=model, messages=messages,
+                response_format=format_options, max_completion_tokens=tokens, temperature=0.4,
+                service_tier='on_demand',
+                **({'reasoning_effort': 'low'} if gpt_oss else {}))
+        except Exception as exc:
+            status = getattr(exc, 'status_code', None)
+            if status in (402, 403):
+                raise ValueError('Groq rejected access or requested billing. Free-only session stopped; paid fallback is blocked.') from None
+            if status == 429:
+                raise ValueError('Groq free allowance exhausted or rate limited. Session stopped without retry.') from None
+            raise
+        usage = getattr(reply, 'usage', None)
+        if self.free_only and usage is not None:
+            total = getattr(usage, 'total_tokens', None)
+            if isinstance(total, int) and total > MAX_INPUT_TOKENS + MAX_OUTPUT_TOKENS:
+                raise ValueError('Groq reported usage above the reserved free budget. Session stopped.')
         content = reply.choices[0].message.content if reply.choices else None
         answer = parse_answer(content)
         professional = json.loads(context)['professional_context']

@@ -7,7 +7,7 @@ from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app.config import Settings
-from app.cost import COST_UNKNOWN, LiveOptions, PRICING_DATE, Quote
+from app.cost import LiveOptions, PRICING_DATE, Quote
 from app.main import create_app
 from app.profile import SEED, ProfileStore
 from app.transcription import Transcriber
@@ -19,42 +19,42 @@ WS = '/ws?client=safety-tests-12345678'
 
 
 def test_offline_pricing_and_zero_cap():
+    from decimal import Decimal
     assert LiveOptions().minutes == 5
     assert LiveOptions().cap_ugx == 0
-    zero = Quote(live_options(cap_ugx=0), False, 120, PRICING_DATE)
-    assert zero.public()['total_ugx'] == 100
-    assert zero.public()['total_usd'] == '0.0250'
-    assert zero.public()['hourly_usd'] == '0.30'
-    with pytest.raises(ValueError, match='exceeds your UGX 0'):
-        zero.require_authorisation()
-    with_keyterms = Quote(live_options(cap_ugx=127), True, 120, PRICING_DATE)
-    assert with_keyterms.total_ugx == 127
-    assert with_keyterms.public()['hourly_usd'] == '0.38'
+    free = Quote(live_options(), False, 120, PRICING_DATE)
+    assert free.public()['total_ugx'] == 0
+    assert free.public()['total_usd'] == '0.025000'
+    assert free.public()['hourly_usd'] == '0.300000'
+    assert free.assembly_reserve == Decimal('0.034375')
+    free.require_authorisation()
+    with_keyterms = Quote(live_options(), True, 120, PRICING_DATE)
+    assert with_keyterms.public()['hourly_usd'] == '0.380000'
     with_keyterms.require_authorisation()
     with pytest.raises(ValueError, match='configured maximum'):
         Quote(live_options(minutes=6), False, 5, PRICING_DATE).require_authorisation()
 
 
 @pytest.mark.parametrize('options,today', [
-    (live_options(fx_ugx_per_usd=None), PRICING_DATE),
-    (live_options(fx_source=''), PRICING_DATE),
-    (live_options(fx_date=PRICING_DATE - timedelta(days=8)), PRICING_DATE),
-    (live_options(fx_date=PRICING_DATE + timedelta(days=1)), PRICING_DATE),
-    (live_options(fx_date=PRICING_DATE + timedelta(days=31)), PRICING_DATE + timedelta(days=31)),
+    (live_options(free={'assembly_hourly_usd': None}), PRICING_DATE),
+    (live_options(free={'assembly_source': ''}), PRICING_DATE),
+    (live_options(free={'checked_at': None}), PRICING_DATE),
+    (live_options(free={'valid_until': None}), PRICING_DATE),
+    (live_options(), PRICING_DATE + timedelta(days=31)),
 ])
 def test_unknown_or_stale_prices_fail_closed(options, today):
     quote = Quote(options, False, 120, today)
     assert quote.public()['total_ugx'] is None
-    with pytest.raises(ValueError, match=COST_UNKNOWN):
+    with pytest.raises(ValueError):
         quote.require_authorisation()
 
 
 @pytest.mark.parametrize('options, message', [
     (live_options(confirmed=False), 'Explicit authorisation'),
-    (live_options(assembly_billing_checked=False), 'Billing'),
-    (live_options(groq_billing_checked=False), 'Billing'),
-    (live_options(fx_ugx_per_usd=None), COST_UNKNOWN),
-    (live_options(cap_ugx=0), 'exceeds your UGX 0'),
+    (live_options(assembly_billing_checked=False), 'not confirmed for AssemblyAI'),
+    (live_options(groq_billing_checked=False), 'not confirmed for Groq'),
+    (live_options(free={'assembly_credits_usd': '0'}), 'free allowance exhausted'),
+    (live_options(cap_ugx=1), 'UGX 0'),
 ])
 def test_blockers_precede_every_capture_and_provider_call(options, message):
     async def check():

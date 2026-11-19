@@ -7,8 +7,13 @@
 <section class="controls panel" aria-label="Session controls">
 <div class="device"><label for="mic">Your microphone</label><div class="select-row"><select id="mic" aria-label="Microphone device"></select><button id="test-mic" class="quiet">Test</button></div><meter id="level-me" min="0" max="1" value="0" aria-label="Microphone audio level"></meter><small id="status-me">Not capturing</small></div>
 <div class="device"><label for="system">Interviewer · system audio</label><div class="select-row"><select id="system" aria-label="System audio device"></select><button id="test-system" class="quiet">Test</button></div><meter id="level-interviewer" min="0" max="1" value="0" aria-label="System audio level"></meter><small id="status-interviewer">Select BlackHole; routing required</small></div>
-<div class="actions"><label for="length">Answer length</label><select id="length"><option value="short">Brief · 20–30 sec</option><option value="medium" selected>Standard · 45–60 sec</option><option value="long">Detailed · 90–120 sec</option></select><div class="select-row"><button id="start" class="primary" disabled>Authorise live session</button><button id="stop" class="danger stop-all" disabled>STOP ALL</button></div></div>
+<div class="actions"><label for="length">Answer length</label><select id="length"><option value="short">Brief · 20–30 sec</option><option value="medium" selected>Standard · 45–60 sec</option><option value="long">Detailed · 90–120 sec</option></select><div class="select-row"><button id="start" class="primary" aria-describedby="start-blocker" disabled>Start free live session</button><button id="stop" class="danger stop-all" disabled>STOP ALL</button></div><p id="start-blocker" role="status"></p><button id="review-safety" class="quiet" type="button">Review live session safety</button></div>
 </section>
+<details class="panel interview-setup" id="audio-diagnostics" hidden>
+  <summary>Audio diagnostics <span id="audio-diagnostic-summary"></span></summary>
+  <p id="audio-browser-status">No audio test requested in this tab.</p>
+  <ol id="audio-diagnostic-log" aria-live="polite"></ol>
+</details>
 <details class="panel interview-setup">
   <summary>Interview setup <span id="interview-selection"></span></summary>
   <div class="setup-grid">
@@ -18,30 +23,62 @@
     <div class="wide"><label for="job-description">Job description</label><textarea id="job-description" rows="4" maxlength="10000"></textarea></div>
     <div class="wide"><label for="job-notes">Role-specific notes</label><textarea id="job-notes" rows="2" maxlength="4000"></textarea></div>
     <div class="wide"><label for="job-research">Company research, sources and verification dates</label><textarea id="job-research" maxlength="5000" rows="3"></textarea></div>
-    <label class="wide keyterms"><input id="keyterms" type="checkbox"> Improve recognition of engineering terms (+$0.04 per audio channel-hour)</label>
+    <label class="wide keyterms"><input id="keyterms" type="checkbox"> Improve recognition of engineering terms (enter the applicable free-credit surcharge below)</label>
   </div>
 </details>
 <details class="panel safety-panel">
   <summary>Live session safety <strong id="live-mode" class="badge">LOCAL-ONLY</strong></summary>
-  <p>Live sessions send audio to AssemblyAI and selected interview context to Groq. Both services may charge. The estimate and cap cover transcription only and cannot cap the provider bill.</p>
+  <p><strong>FREE USAGE ONLY</strong> · Maximum user payment stays UGX 0. Free balances and billing protections must be confirmed for the accounts attached to these API keys.</p>
   <div class="setup-grid">
     <div><label for="live-minutes">Session limit (minutes)</label><input id="live-minutes" type="number" min="1" max="1440" step="1" value="5"></div>
-    <div><label for="live-cap">Maximum transcription estimate (UGX)</label><input id="live-cap" type="number" min="0" max="1000000000" step="1" value="0"></div>
+    <div><label for="live-cap">Maximum user payment (UGX)</label><input id="live-cap" type="number" value="0" readonly></div>
+    <div><label for="live-answers">Maximum Groq answers</label><input id="live-answers" type="number" min="1" max="100" value="3"></div>
   </div>
   <details>
-    <summary>Exchange rate and provider billing checks</summary>
+    <summary>AssemblyAI free balance and protection</summary>
     <div class="setup-grid">
-      <div><label for="live-fx">Verified UGX per US$1</label><input id="live-fx" type="number" min="0.0001" step="0.0001"></div>
+      <div><label for="free-assembly-plan">Account status</label><select id="free-assembly-plan"><option value="unknown">Not checked</option><option value="unupgraded_trial">Unupgraded free trial</option><option value="billable">Paid, upgraded, or uncertain</option></select></div>
+      <div><label for="free-assembly-usd">Remaining promotional credit (USD)</label><input id="free-assembly-usd" type="number" min="0" step="0.000001"></div>
+      <div><label for="free-assembly-rate">Your account rate for Universal Streaming English (USD/channel-hour)</label><input id="free-assembly-rate" type="number" min="0.000001" step="0.000001"></div>
+      <div><label for="free-assembly-keyterms">Your keyterm surcharge if enabled (USD/channel-hour)</label><input id="free-assembly-keyterms" type="number" min="0" step="0.000001"></div>
+      <div class="wide"><label for="free-assembly-source">Dashboard or support reference for this key’s account and rates</label><input id="free-assembly-source" maxlength="240"></div>
+    </div>
+    <label class="keyterms"><input type="checkbox" id="free-assembly-protected"> I verified this unupgraded trial cannot charge, invoice, auto-pay or fall back to purchased credits. There is no payment method or billing agreement.</label>
+    <label class="keyterms"><input type="checkbox" id="live-assembly-check"> I checked the actual remaining free credit and confirmed it applies to both streaming connections and any selected keyterms.</label>
+    <p><a href="https://www.assemblyai.com/docs/faq/how-to-get-your-api-key" target="_blank" rel="noreferrer">AssemblyAI billing guidance</a></p>
+  </details>
+  <details>
+    <summary>Groq free quota and protection</summary>
+    <div class="setup-grid">
+      <div><label for="free-groq-plan">Account status</label><select id="free-groq-plan"><option value="unknown">Not checked</option><option value="free">Free plan</option><option value="promotional_billable">Promotional credits on a billable plan</option><option value="paid">Developer, paid or uncertain</option></select></div>
+      <div><label for="free-groq-tokens">Remaining daily free tokens for the selected model</label><input id="free-groq-tokens" type="number" min="0" step="1"></div>
+      <div><label for="free-groq-requests">Remaining daily free requests for the selected model</label><input id="free-groq-requests" type="number" min="0" step="1"></div>
+      <div class="wide"><label for="free-groq-source">Dashboard or support reference for this key’s organisation and model quota</label><input id="free-groq-source" maxlength="240"></div>
+    </div>
+    <label class="keyterms"><input type="checkbox" id="free-groq-protected"> I verified Groq is on the Free plan with no paid billing, auto-reload or invoice agreement. Requests are restricted when quota runs out. I checked the applicable rate limits as well.</label>
+    <label class="keyterms"><input type="checkbox" id="live-groq-check"> I checked the actual remaining free tokens and requests for this organisation and model.</label>
+    <p><a href="https://console.groq.com/docs/billing-faqs" target="_blank" rel="noreferrer">Groq billing guidance</a> · <a href="https://console.groq.com/docs/rate-limits" target="_blank" rel="noreferrer">Quota guidance</a></p>
+  </details>
+  <div class="setup-grid">
+    <div><label for="free-valid-until">Both allowances remain available through (local date/time)</label><input id="free-valid-until" type="datetime-local"></div>
+  </div>
+  <label class="keyterms"><input type="checkbox" id="free-exclusive"> These balances are reserved for this session. Other apps and organisation members will not consume them or change billing during the session.</label>
+  <label class="keyterms"><input type="checkbox" id="free-confirm-now"> I have just verified the balances and protections above.</label>
+  <p id="free-session-usage" role="status" hidden></p>
+  <p id="live-quote" role="status">Free allowances have not been confirmed.</p>
+  <p class="safety-source"><a id="live-price-source" href="https://console.groq.com/docs/models" target="_blank" rel="noreferrer">Groq gross usage prices</a> <span id="live-price-date"></span></p>
+  <p id="live-billing" class="safety-warning">Account balances and billing protections are user-confirmed. The app cannot read or control provider billing.</p>
+  <ul id="live-blockers"></ul>
+  <p>The reserve adds 25% and 30 seconds of transcription shutdown time. Groq requests and tokens are bounded. Free-plan rate limits may interrupt a session. STOP ALL ends the session. If zero-billing protection is uncertain, live use stays blocked.</p>
+  <details>
+    <summary>Optional gross-cost exchange-rate reference</summary>
+    <p>Exchange rates are not required for sessions fully covered by free allowances.</p>
+    <div class="setup-grid">
+      <div><label for="live-fx">UGX per USD</label><input id="live-fx" type="number" min="0.0001" step="0.0001"></div>
       <div><label for="live-fx-date">Exchange rate date</label><input id="live-fx-date" type="date"></div>
       <div><label for="live-fx-source">Exchange rate source</label><input id="live-fx-source" maxlength="180"></div>
     </div>
-    <label class="keyterms"><input type="checkbox" id="live-assembly-check"> I checked AssemblyAI billing status, free allowance and remaining credits in my account.</label>
-    <label class="keyterms"><input type="checkbox" id="live-groq-check"> I checked Groq billing status, free allowance and remaining credits in my account.</label>
   </details>
-  <p id="live-quote" role="status">COST UNKNOWN — LIVE SESSION BLOCKED</p>
-  <p class="safety-source"><a id="live-price-source" href="https://www.assemblyai.com/pricing" target="_blank" rel="noreferrer">AssemblyAI pricing</a> <span id="live-price-date"></span></p>
-  <p id="live-billing" class="safety-warning">Provider billing status, free allowances and credits are unverified.</p>
-  <ul id="live-blockers"></ul>
 </details>
 <details class="panel copilot-tool">
   <summary>Written questions &amp; coding challenges</summary>
