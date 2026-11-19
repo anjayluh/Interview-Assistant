@@ -133,3 +133,30 @@ def test_phone_written_question_uses_laptop_session_without_starting_streams(mon
             context = json.loads(session.answers.calls[0][0])
             assert context['professional_context']['company_research_user_supplied'] == 'Supplied annual report'
             assert phone.get('/api/companion/state', headers=headers).json()['answers'][0]['question'] == prompt
+
+
+@pytest.mark.parametrize('prompt', [
+    'Share a brief summary about yourself and your experience',
+    'Please share a brief summary about yourself and your experience.',
+    'So, share your background with us',
+    'Introduce yourself',
+    'Summarize your relevant experience',
+    'Summarise your career so far',
+    'Outline your approach to leading an engineering team',
+    'Give us a brief overview of your background',
+    'Give a short introduction',
+])
+def test_imperative_interview_prompts_without_question_marks(prompt):
+    from app.questions import interviewer_intent
+    assert is_question(prompt)
+    assert interviewer_intent(prompt) == 'question'
+
+
+@pytest.mark.parametrize('statement', [
+    'Thanks for sharing your experience.',
+    'I will share some information about the company.',
+    'Our team shares responsibility for deployments.',
+    'That was a helpful summary.',
+])
+def test_interviewer_statements_do_not_trigger_answers(statement):
+    assert not is_question(statement)

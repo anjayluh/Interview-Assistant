@@ -112,3 +112,53 @@ def test_sdk_queue_guard():
         assert t.client._write_queue.qsize()==8
         await t.client._client.aclose()
     asyncio.run(check())
+
+
+def test_server_heartbeat_keeps_background_tab_live_without_browser_timer(monkeypatch):
+    import time
+    monkeypatch.setattr('app.main.HEARTBEAT_TIMEOUT', .15)
+    app = create_app(Settings(assembly_key='fake', groq_key='fake'))
+    session = app.state.control.session
+    session.capture_factory = FakeCapture
+    session.transcriber_factory = FakeTranscriber
+    session.answers = FakeAnswers()
+    with TestClient(app) as client:
+        client.get('/')
+        with client.websocket_connect('/ws?client=' + CLIENT, headers=ORIGIN) as ws:
+            ws.receive_json()
+            ws.send_json(start_command(client))
+            async def audio_levels():
+                for _ in range(200):
+                    session.emit({'type': 'level', 'role': 'me', 'value': .1})
+                    await asyncio.sleep(.003)
+            levels = client.portal.start_task_soon(audio_levels)
+            end = time.monotonic() + .5
+            replies = 0
+            while time.monotonic() < end:
+                event = ws.receive_json()
+                if event['type'] == 'heartbeat':
+                    ws.send_json({'cmd': 'heartbeat'})
+                    replies += 1
+            levels.cancel()
+            assert replies >= 3
+            assert session.state == 'running'
+            assert len(session.captures) == 2
+            assert session.limit_minutes == 60
+        assert session.state == 'idle'
+
+
+def test_idle_disconnect_does_not_overwrite_stop_reason_or_clear_again(monkeypatch):
+    monkeypatch.setattr('app.main.HEARTBEAT_TIMEOUT', .05)
+    app = create_app()
+    session = app.state.control.session
+    session.reason = 'STOP ALL completed. Local-only mode.'
+    with TestClient(app) as client:
+        client.get('/')
+        for _ in range(2):
+            with client.websocket_connect('/ws?client=' + CLIENT, headers=ORIGIN) as ws:
+                initial = ws.receive_json()
+                assert initial['state']['reason'] == session.reason
+                for _ in range(6):
+                    assert ws.receive_json()['type'] == 'heartbeat'
+            assert session.reason == 'STOP ALL completed. Local-only mode.'
+            assert session.companion_state()['reason'] == session.reason

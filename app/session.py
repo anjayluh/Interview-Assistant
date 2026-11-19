@@ -84,7 +84,7 @@ class Session:
         self.emit({'type': 'latency', **item})
 
     def companion_state(self):
-        return {'state': self.state, 'answer_enabled': self.answer_enabled, 'latest': self.latest, 'answers': [item for item in self.suggestions if item.get('revision') == self.revision],
+        return {'state': self.state, 'reason': self.reason, 'answer_enabled': self.answer_enabled, 'latest': self.latest, 'answers': list(self.suggestions),
                 'history': list(self.history), 'partials': list(self.partials.values()),
                 'draft': self.draft, 'answer_status': self.answer_status, 'metrics': list(self.metrics), 'sent_at': time.time()}
 

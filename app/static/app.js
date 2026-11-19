@@ -174,7 +174,8 @@ function connect() {
   };
   socket.onmessage = e => {
     const x = JSON.parse(e.data);
-    if (x.type === 'snapshot') { clear(); state(x.state); [...x.history, ...x.partials].forEach(transcript); x.answers.forEach(answer); }
+    if (x.type === 'heartbeat') { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({cmd: 'heartbeat'})); }
+    else if (x.type === 'snapshot') { clear(); state(x.state); [...x.history, ...x.partials].forEach(transcript); x.answers.forEach(answer); }
     else if (x.type === 'state') state(x);
     else if (x.type === 'transcript') transcript(x);
     else if (x.type === 'answer') answer(x);
@@ -182,7 +183,7 @@ function connect() {
       if (!answerDraft) { answerDraft = document.createElement('article'); answerDraft.className = 'answer-card response'; $('answers').prepend(answerDraft); }
       answerDraft.textContent = 'AI draft · still generating\n' + x.text;
     }
-    else if (x.type === 'answer_superseded') { answerDraft?.remove(); answerDraft = null; $('answers').replaceChildren(); }
+    else if (x.type === 'answer_superseded') { answerDraft?.remove(); answerDraft = null; }
     else if (x.type === 'latency') { liveMetrics.push(x); if (liveMetrics.length > 80) liveMetrics.shift(); renderLatency(liveMetrics); }
     else if (x.type === 'audio_diagnostic') audioDiagnostic(x);
     else if (x.type === 'level') $(`level-${x.role}`).value = x.value;

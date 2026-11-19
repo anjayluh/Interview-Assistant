@@ -13,9 +13,11 @@ def is_question(text):
     if '?' in text or words in {'why', 'how so', 'any questions', 'and then', 'what next'}:
         return True
     return bool(re.search(
-        r'(?:^|[.!?]\s+|,\s+)(?:(?:so|and|okay|right|now|please)\s+)*'
+        r'(?:^|[.!?]\s+|,\s+)(?:(?:so|and|okay|right|now|please|first|next)\s+)*'
         r'(?:what|why|how|when|where|which|who|tell (?:me|us)|walk (?:me|us)|'
         r'describe|explain|compare|design|implement|write|debug|optimise|optimize|discuss|solve|find|'
+        r'share|summari[sz]e|outline|introduce yourself|'
+        r'give (?:me |us )?(?:(?:a |an )?(?:brief |quick |short )?(?:summary|overview|introduction))|'
         r'give (?:me |us )?an example|(?:can|could|would|have|do|did|will|are) you|'
         r'is there|any questions|say more|help (?:me|us) understand)\b', text, re.I
     ) or re.search(

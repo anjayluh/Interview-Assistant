@@ -209,17 +209,31 @@ def create_app(settings=None, profile_store=None, diagnostic_path=None):
             control.owner = control.socket = None
             raise
         q = control.queue = asyncio.Queue(maxsize=128)
+        disconnect_cause = 'socket_closed'
         async def send_events():
+            interval = min(3, HEARTBEAT_TIMEOUT / 3)
+            next_ping = time.monotonic() + interval
             while True:
-                await ws.send_json(await q.get())
+                if time.monotonic() >= next_ping:
+                    # Send even when continuous audio-level events keep the queue busy.
+                    await ws.send_json({'type': 'heartbeat'})
+                    next_ping = time.monotonic() + interval
+                try:
+                    event = await asyncio.wait_for(q.get(), max(.001, next_ping - time.monotonic()))
+                except TimeoutError:
+                    continue
+                await ws.send_json(event)
 
         async def receive_commands():
-            nonlocal pending_quote
+            nonlocal pending_quote, disconnect_cause
             while True:
                 try:
                     message = await asyncio.wait_for(ws.receive_text(), HEARTBEAT_TIMEOUT)
                 except TimeoutError:
-                    await control.stop('Browser heartbeat expired. Local-only mode.')
+                    if control.session.state == 'idle' and not control.operations:
+                        continue
+                    disconnect_cause = 'heartbeat_timeout'
+                    await control.stop('Mac browser stopped responding for 15 seconds. Live session stopped; reconnect and authorise a new session.')
                     await ws.close(code=1013)
                     return
                 if len(message.encode('utf-8')) > 65536:
@@ -291,7 +305,18 @@ def create_app(settings=None, profile_store=None, diagnostic_path=None):
                     control.queue = None
                     pending_quote = None
                     try:
-                        await control.stop('Browser disconnected. Local-only mode.')
+                        if diagnostic_path:
+                            from .provider_errors import save_diagnostic
+                            from pathlib import Path
+                            with contextlib.suppress(OSError):
+                                save_diagnostic(Path(diagnostic_path).with_name('last-connection-event.json'), {
+                                    'at': time.time(), 'cause': disconnect_cause,
+                                    'state_at_disconnect': control.session.state,
+                                    'heartbeat_timeout_seconds': HEARTBEAT_TIMEOUT,
+                                })
+                        # An idle reconnect must not clear context or replace STOP ALL's reason.
+                        if control.session.state != 'idle' or control.operations:
+                            await control.stop('Mac browser disconnected. Live session stopped; reconnect and authorise a new session.')
                     finally:
                         control.socket = control.owner = None
 

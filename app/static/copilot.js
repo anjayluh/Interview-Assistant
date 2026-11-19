@@ -238,6 +238,12 @@ function renderLatency(metrics) {
       latency = []; renderLatency(latency);
       if (lastAnswerStatus.phase === 'failed') answerStatus(lastAnswerStatus);
     }
+    function sessionLabel(x) {
+      if (x.state === 'running') return x.answer_enabled === false
+        ? 'Phone connected · Transcription active, suggestions paused'
+        : 'Phone connected · Live session controlled on the Mac';
+      return 'Phone connected · ' + (x.reason || 'Local practice');
+    }
     function handle(x) {
       if (x.type === 'companion_snapshot') {
         lastAnswerStatus = x.answer_status || {phase: 'idle'};
@@ -247,7 +253,7 @@ function renderLatency(metrics) {
         latency = x.metrics || []; renderLatency(latency);
         if (x.draft) handle(x.draft);
         if (x.answer_status) answerStatus(x.answer_status);
-        get('phone-status').textContent = x.state === 'running' ? 'Connected · Live session controlled on the Mac' : 'Connected · Local practice';
+        get('phone-status').textContent = sessionLabel(x);
       } else if (x.type === 'transcript') sourceTurn(x);
       else if (x.type === 'groq') answerStatus({phase: x.status === 'error' ? 'failed' : x.status, message: x.message, diagnostic: x.diagnostic});
       else if (x.type === 'latency') { latency.push(x); latency = latency.slice(-80); renderLatency(latency); }
@@ -260,10 +266,9 @@ function renderLatency(metrics) {
         get('phone-answer-status').textContent = 'AI-generated suggested response';
       } else if (x.type === 'answer_superseded') {
         get('phone-draft').hidden = true;
-        get('phone-answers').replaceChildren();
-        get('phone-answer-status').textContent = 'Preparing an answer to the latest interviewer question and instructions…';
+        get('phone-answer-status').textContent = 'Previous suggestions remain below. Preparing an answer to the latest interviewer question and instructions…';
       } else if (x.type === 'state') {
-        get('phone-status').textContent = x.state === 'running' ? (x.answer_enabled === false ? 'Connected · Transcription active, suggestions paused' : 'Connected · Live session controlled on the Mac') : 'Connected · ' + x.reason;
+        get('phone-status').textContent = sessionLabel(x);
         if (x.answer_status) answerStatus(x.answer_status);
       }
       else if (x.type === 'clear') clearPhone();

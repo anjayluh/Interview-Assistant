@@ -259,3 +259,46 @@ def test_overlong_challenge_blocks_instead_of_generating_from_truncated_context(
         assert any(e['type'] == 'error' and 'context limit' in e['message'] for e in events)
         await session.stop()
     asyncio.run(check())
+
+
+def test_completed_answer_survives_next_question_and_phone_reconnect():
+    async def check():
+        session, events, _ = make_session()
+        await session.start(0, 1, 'short', options=live_options())
+        system = session.transcribers['interviewer']
+        system.turn(turn('How do you handle feedback?', 1))
+        await session.question_task
+        await session.answer_task
+        first = list(session.suggestions)
+        assert first
+        system.turn(turn('Why should we hire you?', 2))
+        assert session.revision != first[0]['revision']
+        assert session.companion_state()['answers'] == first
+        await session.question_task
+        await session.answer_task
+        assert len(session.companion_state()['answers']) == 2
+        await session.stop()
+    asyncio.run(check())
+
+
+def test_spoken_introduction_generates_answer_for_desktop_and_phone_once():
+    async def check():
+        session, events, _ = make_session()
+        await session.start(0, 1, 'short', options=live_options())
+        prompt = 'Share a brief summary about yourself and your experience'
+        session.transcribers['me'].turn(turn(prompt, 1))
+        assert session.question_task is None
+        session.transcribers['interviewer'].turn(turn(prompt, 1, final=False))
+        assert session.question_task is None
+        session.transcribers['interviewer'].turn(turn(prompt, 1))
+        await session.question_task
+        await session.answer_task
+        answers = [event for event in events if event['type'] == 'answer']
+        assert len(answers) == 1 and answers[0]['question'] == prompt
+        assert answers[0]['text']
+        assert session.companion_state()['answers'] == [{key: value for key, value in answer.items() if key != 'sent_at'} for answer in answers]
+        session.transcribers['interviewer'].turn(turn(prompt + '.', 1))
+        await asyncio.sleep(.3)
+        assert len([event for event in events if event['type'] == 'answer']) == 1
+        await session.stop()
+    asyncio.run(check())
