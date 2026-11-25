@@ -245,6 +245,12 @@ class InterviewContext:
         p, s = self.profile, self.setup
         query = terms(question)
         role_terms = terms(s.title + ' ' + s.description + ' ' + s.notes)
+        selected_cv = self.cv_facts
+        excluded = set()
+        if re.search(r'(?:outside|apart from|other than|not (?:about|involving|related to|connected to)).{0,70}payments?|projects?.{0,70}(?:not|outside).{0,30}payments?', question, re.I):
+            excluded = {'payment','payments','repayment','repayments','lending','loan','loans'}
+            selected_cv = '\n'.join(line for line in self.cv_facts.splitlines() if not terms(line) & excluded)
+            query = (query - excluded) | {'project','importer','crm','kyc'}
         background = bool(query & {'yourself', 'background', 'experience', 'career', 'role', 'led', 'example'})
         facts = {
             'name': p.name, 'identity': p.identity,
@@ -253,10 +259,13 @@ class InterviewContext:
             'skills': relevant(p.skills, query, 5, role_terms=role_terms, fallback=True),
             'achievements': relevant(p.achievements, query, 4, role_terms=role_terms, fallback=background),
             'recent_profile_notes': relevant(p.notes, query, 3, role_terms=role_terms),
-            'selected_cv_excerpts': relevant(self.cv_facts, query, 4, role_terms=role_terms),
+            'selected_cv_excerpts': relevant(selected_cv, query, 4, role_terms=role_terms),
             'target_role': s.title, 'target_company': s.company,
             'job_description_excerpt': s.description[:1400],
             'role_notes': s.notes[:500],
             'company_research_user_supplied': s.research[:1800],
         }
+        if excluded:
+            for field in ('achievements','recent_profile_notes'):
+                facts[field] = [line for line in facts[field] if not terms(line) & excluded]
         return json.dumps(facts, ensure_ascii=False)

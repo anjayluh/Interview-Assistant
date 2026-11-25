@@ -302,3 +302,25 @@ def test_spoken_introduction_generates_answer_for_desktop_and_phone_once():
         assert len([event for event in events if event['type'] == 'answer']) == 1
         await session.stop()
     asyncio.run(check())
+
+
+def test_numbered_tts_prompt_triggers_once_and_preserves_full_interviewer_text():
+    async def check():
+        session, events, answers = make_session()
+        await session.start(0, 1, 'medium', options=live_options())
+        prompt = 'Phase 3 Backend Engineering Foundations Python Question 6 Explain the difference between a list tuple set in dictionary in Python.'
+        session.turn('me', turn(prompt, 6))
+        assert session.question_task is None
+        session.turn('interviewer', turn(prompt, 6, final=False))
+        assert session.question_task is None
+        session.turn('interviewer', turn(prompt, 6))
+        await session.question_task; await session.answer_task
+        assert len(answers.calls) == 1
+        assert json.loads(answers.calls[0][0])['question'] == prompt
+        assert session.history[-1]['text'] == prompt
+        assert session.companion_state()['answers'][0]['question'] == prompt
+        session.turn('interviewer', turn(prompt, 6))
+        await asyncio.sleep(.3)
+        assert len(answers.calls) == 1
+        await session.stop()
+    asyncio.run(check())

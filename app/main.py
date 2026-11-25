@@ -18,6 +18,7 @@ from .profile_api import LOCAL_ORIGINS, profile_routes
 from .cost import LiveOptions, quote
 from .copilot_api import LOCAL_HOSTS, copilot_routes
 from .phone import Phone
+from .review_api import review_routes
 from pydantic import BaseModel, StrictBool
 
 HEARTBEAT_TIMEOUT = 15
@@ -74,7 +75,7 @@ class Controller:
         await self.stop('Backend shutting down.')
 
 
-def create_app(settings=None, profile_store=None, diagnostic_path=None):
+def create_app(settings=None, profile_store=None, diagnostic_path=None, review_path=None):
     # Provider debug/error payloads can contain request details.
     for name in ('assemblyai', 'groq', 'httpx', 'httpcore', 'websockets'):
         logger = logging.getLogger(name)
@@ -87,6 +88,8 @@ def create_app(settings=None, profile_store=None, diagnostic_path=None):
     if diagnostic_path:
         from .provider_errors import save_diagnostic
         control.session.diagnostic_sink = lambda diagnostic: save_diagnostic(diagnostic_path, diagnostic)
+    if review_path:
+        control.session.configure_review(review_path)
     token = secrets.token_urlsafe(32)
     pending_quote = None
     store = profile_store or ProfileStore(ROOT / '.runtime/professional-profile.json')
@@ -95,6 +98,8 @@ def create_app(settings=None, profile_store=None, diagnostic_path=None):
         nonlocal pending_quote
         try:
             setup = InterviewSetup.model_validate(data.get('interview', {}))
+            record_audio = data.get('record_audio',False)
+            if not isinstance(record_audio,bool): raise ValueError('Invalid audio review option.')
             options = LiveOptions.model_validate(data.get('live', {}))
         except ValueError:
             raise ValueError('Check the interview setup and live safety fields.') from None
@@ -106,7 +111,7 @@ def create_app(settings=None, profile_store=None, diagnostic_path=None):
             raise ValueError('Review the current session settings and authorise again.')
         pending_quote = None
         interview = store.interview(setup)
-        await control.session.start(int(data['mic']), int(data['system']), valid_length(data), interview, options)
+        await control.session.start(int(data['mic']), int(data['system']), valid_length(data), interview, options, record_audio=record_audio)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -122,6 +127,7 @@ def create_app(settings=None, profile_store=None, diagnostic_path=None):
     phone.app = app
     app.include_router(profile_routes(store, token))
     app.include_router(copilot_routes(store, token, control, phone))
+    app.include_router(review_routes(control, token))
 
     @app.middleware('http')
     async def headers(request: Request, call_next):
@@ -208,6 +214,7 @@ def create_app(settings=None, profile_store=None, diagnostic_path=None):
         except BaseException:
             control.owner = control.socket = None
             raise
+        control.session.emit({'type':'connection','device':'desktop','status':'connected'})
         q = control.queue = asyncio.Queue(maxsize=128)
         disconnect_cause = 'socket_closed'
         async def send_events():
@@ -247,6 +254,9 @@ def create_app(settings=None, profile_store=None, diagnostic_path=None):
                         raise ValueError('A session operation is already in progress. Stop it before starting another.')
                     if cmd == 'heartbeat':
                         continue
+                    if cmd == 'rendered':
+                        control.session.review.receipt(data.get('revision'), 'desktop', data.get('render_ms'), data.get('replay',False))
+                        continue
                     if cmd == 'start':
                         control.launch(lambda data=data: start_interview(data))
                     elif cmd == 'stop':
@@ -262,6 +272,7 @@ def create_app(settings=None, profile_store=None, diagnostic_path=None):
                         control.session.length = valid_length(data)
                         control.emit(control.session.snapshot())
                     elif cmd == 'clear':
+                        if control.session.state != 'idle': raise ValueError('Stop the session before deleting its review.')
                         control.session.clear()
                     elif cmd == 'answer':
                         if control.session.state != 'running':
@@ -303,6 +314,7 @@ def create_app(settings=None, profile_store=None, diagnostic_path=None):
                 await asyncio.gather(*tasks, return_exceptions=True)
                 if control.socket is ws:
                     control.queue = None
+                    control.session.emit({'type':'connection','device':'desktop','status':'disconnected','cause':disconnect_cause})
                     pending_quote = None
                     try:
                         if diagnostic_path:
@@ -343,4 +355,4 @@ def valid_length(data):
         raise ValueError('Choose Brief, Standard or Detailed answers.')
     return length
 
-app = create_app(diagnostic_path=ROOT / '.runtime/last-groq-error.json')
+app = create_app(diagnostic_path=ROOT / '.runtime/last-groq-error.json', review_path=ROOT / '.runtime/session-review.json')

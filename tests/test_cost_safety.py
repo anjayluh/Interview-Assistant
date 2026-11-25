@@ -123,7 +123,7 @@ def test_single_use_quote_and_stop_all_cancels_generation():
             assert generating.wait(1)
             assert client.post('/api/stop-all', headers=ORIGIN).json()['status'] == 'stopped'
             assert cancelled.is_set()
-            assert session.state == 'idle' and not session.history and not session.latest
+            assert session.state == 'idle' and not session.history and session.latest == 'How would you design this?'
             assert not session.interview and not session.pending_questions and not session.answers.verified
             assert all(x.closed for x in captures + streams)
             ws.send_json(start)

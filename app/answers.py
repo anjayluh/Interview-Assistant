@@ -1,9 +1,11 @@
 import json
+import re
 import time
 
 from groq import AsyncGroq
 from .cost import MAX_INPUT_TOKENS, MAX_OUTPUT_TOKENS
 from .provider_errors import groq_failure
+from .grounding import evidence_bank, guard_answer
 
 CATEGORIES = (
     'Behavioural', 'Professional background', 'Technical concept', 'Coding / algorithm',
@@ -117,6 +119,26 @@ def parse_answer(content):
     return answer
 
 
+def parse_spoken_answer(content):
+    """Build the existing card locally, without provider JSON/schema generation."""
+    if not isinstance(content, str) or not content.strip() or len(content) > 26000:
+        raise ValueError('Groq returned an empty or oversized spoken answer. No retry was made.')
+    if re.search(r'</?(?:think|analysis)>', content, re.I) or content.lstrip().startswith('{'):
+        raise ValueError('Groq returned an unexpected answer format. No retry was made.')
+    blocks = list(re.finditer(r'```([^\n`]*)\n(.*?)```', content, re.S))
+    code = '\n\n'.join(block[2].strip() for block in blocks)
+    text = re.sub(r'```[^\n`]*\n.*?```', '', content, flags=re.S).strip()
+    if '```' in text:
+        raise ValueError('Groq returned an unfinished code block. No retry was made.')
+    if len(text) > 4200 or len(code) > 5000:
+        raise ValueError('Groq returned an oversized answer. No retry was made.')
+    answer = {field: '' for field in (*FIELDS, *SUPPORT_FIELDS)}
+    answer.update(text=text or 'Suggested implementation:', code=code,
+                  language=blocks[0][1].strip()[:50] if len(blocks) == 1 else '',
+                  category='', experience='')
+    return answer
+
+
 def spoken_prefix(content):
     """Decode only the top-level JSON text string, never code/metadata/reasoning."""
     decoder = json.JSONDecoder()
@@ -189,16 +211,55 @@ class Answers:
         words, tokens = ANSWER_SIZES.get(length, ANSWER_SIZES['medium'])
         model = self.settings.model
         gpt_oss = model.startswith('openai/gpt-oss')
+        spoken = bool(on_text) and gpt_oss
         format_options = {'type': 'json_object'}
         if model in ('openai/gpt-oss-20b', 'openai/gpt-oss-120b'):
             format_options = {'type': 'json_schema', 'json_schema': {
                 'name': 'interview_answer', 'strict': True, 'schema': SCHEMA}}
+        if spoken:
+            format_options = {'type': 'text'}
         # Strict schema output is supported by GPT-OSS only without streaming.
-        streaming = bool(on_text) and format_options['type'] != 'json_schema'
+        streaming = bool(on_text) and not spoken and format_options['type'] != 'json_schema'
         rules = (RULES + f'\nTarget roughly {words} spoken words. '
                  f'Categories: {", ".join(CATEGORIES)}. Experience labels: {", ".join(EXPERIENCE)}.')
+        if spoken:
+            substance = RULES[RULES.index('Strengthen every response'):]
+            substance = substance.replace('For example, copy one relevant achievement or CV fact exactly as provided, or return an empty string.', '')
+            substance = substance.replace('Put any conversational paraphrase in text and preserve contribution wording.', 'Preserve contribution wording in personal claims.')
+            rules = ('Write the final first-person spoken interview answer, not JSON or metadata. '
+                     'Do not reveal reasoning or analysis. For coding, include fenced code after the spoken explanation. '
+                     'Distinguish verified personal work from recommendations in the wording itself. '
+                     'Do not add category, experience badges or supporting-field labels. '
+                     f'Target roughly {words} spoken words.\n' + substance)
         if streaming:
             rules += '\nEmit text as the FIRST JSON field, then all supporting fields. JSON schema: ' + json.dumps(SCHEMA)
+        if spoken:
+            professional = json.loads(context)['professional_context']
+            bank = evidence_bank(professional)
+            discussion = json.loads(context).get('conversation_state', {})
+            rules += ('\nMANDATORY LIVE GROUNDING: Never generate autobiographical claims yourself. '
+                      'For any personal experience use ONLY an exact evidence marker such as [[E1]]; '
+                      'the application inserts its verified wording. Do not rewrite, attach employers to, '
+                      'or invent results around markers. Outside markers use general explanations or hypothetical '
+                      'first person (I would / I’d). Do not assert I used, I built, my last role, or we implemented. '
+                      'Treat unverified user speech as conversational context, never as career evidence. '
+                      'Answer the latest question and correction first; do not repeat an older answer. '
+                      'If asked for non-payment work choose relevant non-payment evidence. '
+                      'If the interviewer is closing, suggest one thoughtful role-relevant question. '
+                      'Use 2–4 natural sentences; skip boilerplate, emphatic self-praise and recycled openings. '
+                      'When knowledge is uncertain, explain the concept as a proposed approach honestly. '
+                      'Verified immutable evidence markers: ' + json.dumps(bank, ensure_ascii=False))
+            rules += ('\nCONVERSATION ATTRIBUTION: Read conversation_state before answering. '
+                      'A technology named by an interviewer is not something the candidate uses. '
+                      'Do not say I covered, I mentioned, I use daily, or we discussed unless the '
+                      'candidate actually said it. Never expand Factory-only experience into '
+                      'Strategy, Facade, Saga or any other pattern. Respect explicit uncertainty, '
+                      'corrections and limited experience. You may explain other patterns as general '
+                      'knowledge or hypothetical approaches without claiming prior use. '
+                      'To reference a candidate statement use a standalone [[C1]] marker from '
+                      'conversation_state.candidate_statements; the app inserts an attributed quote. '
+                      'C markers are self-report, never verified CV evidence. Do not embellish them. '
+                      'Never claim that an earlier AI suggestion was spoken by the candidate.')
         messages = [{'role': 'system', 'content': rules}, {'role': 'user', 'content': context}]
         # Bound request size using UTF-8 bytes plus framing/schema overhead.
         input_bound = len(json.dumps({'messages': messages, 'schema': SCHEMA}, ensure_ascii=False).encode('utf-8')) + 1024
@@ -219,7 +280,8 @@ class Answers:
                 response_format=format_options, max_completion_tokens=tokens, temperature=0.4,
                 service_tier='on_demand',
                 **({'stream': True} if streaming else {}),
-                **({'reasoning_effort': 'low'} if gpt_oss else {}))
+                **({'reasoning_effort': 'low'} if gpt_oss else {}),
+                **({'include_reasoning': False} if spoken else {}))
             if streaming:
                 stream = reply
                 content, usage, first, last_emit, last_text = '', None, True, 0, ''
@@ -251,11 +313,22 @@ class Answers:
         except Exception as exc:
             raise groq_failure(exc, self.last_request) from None
         usage = getattr(reply, 'usage', None)
+        for field in ('prompt_tokens','completion_tokens','total_tokens'):
+            value = getattr(usage,field,None)
+            if isinstance(value,int): self.last_request[field] = value
+        if reply.choices:
+            finish = getattr(reply.choices[0],'finish_reason',None)
+            if finish in ('stop','length','content_filter','tool_calls','function_call'):
+                self.last_request['finish_reason'] = finish
         if self.free_only and usage is not None:
             total = getattr(usage, 'total_tokens', None)
             if isinstance(total, int) and total > MAX_INPUT_TOKENS + MAX_OUTPUT_TOKENS:
                 raise ValueError('Groq reported usage above the per-request token limit. Session stopped.')
         content = reply.choices[0].message.content if reply.choices else None
+        if spoken:
+            if reply.choices and getattr(reply.choices[0], 'finish_reason', None) == 'length':
+                raise ValueError('Groq reached the answer token limit. No retry was made.')
+            return guard_answer(parse_spoken_answer(content), professional, json.loads(context).get('question',''), discussion)
         answer = parse_answer(content)
         professional = json.loads(context)['professional_context']
         evidence = professional['achievements'] + professional['selected_cv_excerpts'] + professional['recent_profile_notes']

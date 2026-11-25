@@ -14,7 +14,7 @@ CODES = {'invalid_request_error', 'json_validate_failed', 'context_length_exceed
          'invalid_api_key', 'permission_denied', 'billing_required', 'credit_balance_exhausted'}
 REQUEST_FIELDS = {'operation', 'method', 'endpoint', 'model', 'response_format', 'stream', 'max_completion_tokens',
                   'temperature', 'service_tier', 'reasoning_effort', 'timeout_seconds', 'prompt_utf8_bytes',
-                  'context_utf8_bytes', 'input_size_bound'}
+                  'context_utf8_bytes', 'input_size_bound', 'prompt_tokens', 'completion_tokens', 'total_tokens', 'finish_reason'}
 PARAMS = {'model', 'messages', 'response_format', 'max_completion_tokens', 'temperature', 'stream',
           'stream_options', 'reasoning_effort', 'service_tier'}
 

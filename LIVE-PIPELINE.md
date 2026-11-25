@@ -100,3 +100,53 @@ later answers and deadline shutdown. This is not a real-duration soak test or ph
 iPhone verification. External provider quotas, network outages, access restrictions and
 response limits can still interrupt service; the configured duration cannot guarantee
 provider availability or free allowance for the entire interview.
+
+
+## 25 November 2026: Strict JSON also failed in the real sample
+
+The saved diagnostic reported HTTP 400 `json_validate_failed` with `json_schema`,
+`stream: false`, `openai/gpt-oss-20b` and 1300 completion tokens. Strict mode did
+not prevent the real failure. The exact provider-side reason (e.g. token exhaustion
+versus decoding/validation) cannot be recovered from the allowlisted saved record;
+there is no evidence here of credit exhaustion. The current local state reported
+STOP ALL, which clears transcripts by design, so its empty history does not establish
+that live transcription failed.
+
+For live GPT-OSS answers the initial request now uses `response_format: text` and
+`include_reasoning: false`, without streaming. The existing card is built locally;
+fenced coding implementations are retained in the code panel. Career-evidence rules
+remain in the prompt. No fabricated category/experience/source labels are supplied.
+Structured output remains for non-live callers and the generic JSON adapter remains
+tested; neither is an automatic fallback for a failed live request. Same model, one
+request per question, unchanged token caps, zero retries and unchanged UGX 0 policy.
+This supersedes the strict-JSON live path described above.
+
+Offline installed-SDK tests cover ordinary speech, fenced code, no reasoning exposure,
+no JSON/schema requirement in live requests, transcript/previous-answer retention,
+subsequent questions after failure, 15/60/120-minute simulated deadlines and STOP ALL.
+No real provider request, physical iPhone test or live-duration soak was performed.
+References: https://console.groq.com/docs/api-reference and
+https://console.groq.com/docs/reasoning (GPT-OSS uses include_reasoning, not reasoning_format).
+
+
+## 25 November: Quality and review upgrade
+
+See README sections on answer quality, full review archives and optional local audio.
+This upgrade replaces reliance on the rolling UI buffers for future performance reviews.
+It adds immutable personal-evidence slots plus a conservative local claim guard, distinct
+question/clarification/check-in/goodbye routing, visible current targets and manual per-turn
+requests. Prior generated answers are excluded from factual context. Source-labelled raw
+transcripts and suspected echo decisions remain reviewable. Full session records link
+answer revisions, turn keys, evidence banks, configured duration, SDK/model versions,
+source-device configuration, token/finish metadata, routing outcomes, grounding removals,
+connections and browser receipt coverage. Archive exports are Mac-only and make no cloud
+calls. Local audio is optional/off until explicitly selected and confirmed.
+
+Automated tests reproduce the retained Reveloop failures: unsupported two-million-record,
+NGINX, Stripe/PayPal and invented-metric claims; new non-payment questions; design-pattern
+check-ins; long echo fragments; full archives beyond 120 turns/12 answers/80 metrics;
+protected downloads/deletion; receipt replay/absence; opt-in WAV recording, recording
+backpressure and STOP ALL cleanup. Existing free-only, zero retry, duration and phone
+security checks remain required. Mocked tests and desktop UI checks do not establish
+live Groq answer quality or physical iPhone timing/speaker separation. Legacy sessions
+remain labelled incomplete; no old missing events or vocal delivery are invented.

@@ -1,0 +1,15 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const source=fs.readFileSync('app/static/profile.js','utf8');
+const code=source.slice(source.indexOf('  function applyInterviewPreset()'),source.indexOf('  api().then(next'));
+const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',defaultValue:'60',textContent:''});return nodes.get(id)};
+const preset={minutes:30,interview:{cv_id:'saved-cv',title:'Senior Backend Engineer',company:'Reveloop',description:'Verified job description',notes:'30-minute invitation',research:'Verified company information'}};
+let selections=0,quotes=0;
+const env={URLSearchParams,JSON,Number,Object,Error,data:{cvs:[{id:'saved-cv'}]},$:get,showSelection(){selections++},refreshQuote(){quotes++},location:{hash:'#'+new URLSearchParams({interview:JSON.stringify(preset)})}};
+vm.createContext(env);vm.runInContext(code,env);env.applyInterviewPreset();
+assert.equal(get('interview-cv').value,'saved-cv');assert.equal(get('job-title').value,preset.interview.title);
+assert.equal(get('job-company').value,'Reveloop');assert.equal(get('job-description').value,preset.interview.description);
+assert.equal(get('job-notes').value,preset.interview.notes);assert.equal(get('job-research').value,preset.interview.research);
+assert.equal(get('live-minutes').value,'30');assert.equal(get('live-minutes').defaultValue,'30');assert.equal(quotes,1);
+assert(get('notice').textContent.includes('30 minutes'));
+env.data.cvs=[];assert.throws(()=>env.applyInterviewPreset(),/CV saved for this shortcut is missing/);
+console.log('Interview preset passed: CV, role, company, notes, research and 30-minute duration selected; missing CV reported.');

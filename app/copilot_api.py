@@ -1,5 +1,6 @@
 """Local written capture and practice, plus an opt-in phone companion."""
 import asyncio
+import time
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -175,6 +176,14 @@ def copilot_routes(store, token, control, phone):
         session = control.session
         return session.companion_state()
 
+    @router.post('/api/companion/receipt')
+    async def phone_receipt(request: Request):
+        phone.authorize(request)
+        data = await request.json()
+        if not isinstance(data,dict): raise HTTPException(400,'Invalid receipt.')
+        control.session.review.receipt(data.get('revision'), 'phone', data.get('render_ms'), data.get('replay',False))
+        return {'recorded':True}
+
     @router.get('/api/companion/events')
     async def phone_events(request: Request):
         phone.authorize(request)
@@ -183,6 +192,7 @@ def copilot_routes(store, token, control, phone):
             raise HTTPException(409, 'Close duplicate companion tabs before reconnecting.')
         queue = asyncio.Queue(maxsize=64)
         session.subscribers.add(queue)
+        session.review.capture({'type':'connection','device':'phone','status':'connected','sent_at':time.time()})
         async def events():
             import json
             try:
@@ -200,6 +210,7 @@ def copilot_routes(store, token, control, phone):
                     yield json.dumps(event) + '\n'
             finally:
                 session.subscribers.discard(queue)
+                session.review.capture({'type':'connection','device':'phone','status':'disconnected','sent_at':time.time()})
         return StreamingResponse(events(), media_type='application/x-ndjson',
                                  headers={'X-Accel-Buffering': 'no'})
 

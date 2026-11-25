@@ -2,7 +2,7 @@
 const fs = require('fs'), vm = require('vm'), assert = require('assert');
 const html = fs.readFileSync('app/static/companion.html', 'utf8');
 const ids = new Set([...html.matchAll(/id="([^"]+)"/g)].map(x=>x[1]));
-const nodes = new Map(), timers = [];
+const nodes = new Map(), timers = [], receipts = [];
 function element() { return {value:'',dataset:{},options:[],hidden:false,children:[],textContent:'',
   append(...items){for(const x of items){x.parent=this;this.children.push(x);}},
   prepend(x){x.parent=this;this.children.unshift(x)},
@@ -18,7 +18,7 @@ const environment={document:{body:{dataset:{companion:'true'}},getElementById:ge
   sessionStorage:{getItem:k=>memory[k],setItem:(k,v)=>memory[k]=v,removeItem:k=>delete memory[k]},
   setTimeout:fn=>timers.push(fn),Option:function(){},performance,TextDecoder,
   requestAnimationFrame:fn=>fn(),
-  fetch:async(path,options)=>{assert.equal(path,'/api/companion/events');assert.equal(options.headers.Authorization,'Bearer device-test');return {ok:true,body:transport}}};
+  fetch:async(path,options)=>{if(path==='/api/companion/receipt'){receipts.push(JSON.parse(options.body));return {ok:true,json:async()=>({recorded:true})}}assert.equal(path,'/api/companion/events');assert.equal(options.headers.Authorization,'Bearer device-test');return {ok:true,body:transport}}};
 const source=fs.readFileSync('app/static/copilot.js','utf8');
 const settle=async()=>{for(let i=0;i<10;i++)await new Promise(r=>setImmediate(r))};
 const send=x=>writer.enqueue(new TextEncoder().encode(JSON.stringify(x)+'\n'));
@@ -43,6 +43,7 @@ const allText=node=>node.textContent+' '+node.children.map(allText).join(' ');
  assert(get('phone-answer-status').textContent.includes('draft'));
  assert.equal(get('phone-answers').children.length,0);
  send({type:'answer',text:"I'd use a set and preserve traversal order.",question:'RAW INTERVIEWER PROMPT MUST NOT BE AN ANSWER',category:'Coding',code:'seen = set()',revision:2});await settle();
+ assert(receipts.some(x=>x.revision===2 && x.replay===false && x.render_ms>=0));
  const spoken=allText(get('phone-answers'));
  assert(spoken.includes("I'd use a set"));assert(!spoken.includes('RAW INTERVIEWER'));
  assert(!spoken.includes('I would clarify the input'));assert(get('phone-draft').hidden);

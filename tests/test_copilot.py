@@ -160,3 +160,23 @@ def test_imperative_interview_prompts_without_question_marks(prompt):
 ])
 def test_interviewer_statements_do_not_trigger_answers(statement):
     assert not is_question(statement)
+
+
+@pytest.mark.parametrize('prompt', [
+    'Phase 3 Backend Engineering Foundations Python Question 6 Explain the difference between a list tuple set in dictionary in Python.',
+    'Backend Engineering Question 6: Explain Python collections.',
+    'Phase three Python Question six explain the difference between a list and a tuple',
+    'Question 12 — Compare a list and a set',
+    'Question 7. How do dictionaries work',
+])
+def test_numbered_question_headings_without_asr_sentence_boundaries(prompt):
+    assert is_question(prompt)
+
+
+@pytest.mark.parametrize('statement', [
+    'We will move to question 6 after a break.',
+    'Phase 3 Backend Engineering Foundations Python.',
+    'Question 6 is next.',
+])
+def test_numbered_headings_without_a_prompt_stay_statements(statement):
+    assert not is_question(statement)

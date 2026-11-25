@@ -76,3 +76,15 @@ Open **Latency diagnostics** on either device to see capture, transcript, questi
 The phone now shows **Generating a suggested answer** as soon as generation begins. A Groq failure remains visible after cleanup and reconnection. Expand **Latency diagnostics → Last Groq failure · safe diagnostic details** to see its category, HTTP status (or no status for local/network failures), exception type and safe request settings. Non-billing/access/rate-limit failures pause suggestions while transcription continues; strict provider limits still stop live services. No failed provider request is automatically retried. Stop and correct the reported cause before authorising a new session.
 
 The production backend saves only the last safe failure in `.runtime/last-groq-error.json`. This file is owner-only, contains no interview/CV text or API keys, and is not a session archive. Prior missing session records cannot be reconstructed from it. See [REGRESSION-INVESTIGATION.md](REGRESSION-INVESTIGATION.md) for the SDK compatibility correction and limits of the historical investigation.
+
+
+## Reviewing an interview
+
+The Mac's **Interview review archive** contains full recorded-session data, beyond the
+phone's recent live display. New phone answer render callbacks are acknowledged locally;
+reconnect snapshots are labelled replay. Missing receipts are reported as unmeasured,
+not zero delay. A goodbye shows a reminder to stop capture on the Mac. Full archive and
+optional local-audio downloads stay Mac-only. Audio recording is off unless selected
+and confirmed on the Mac; the phone does not receive provider keys or recording controls.
+Physical iPhone timing, sleep/reconnect and speaker-echo behaviour still require real
+hardware testing; simulated browser tests do not establish those results.

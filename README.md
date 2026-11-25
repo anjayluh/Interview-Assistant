@@ -186,3 +186,86 @@ Live latency diagnostics show stage timestamps on the Mac and phone. Audio remai
 Fresh pages start at 60 minutes and show the permitted 5–120-minute range. Invalid values now produce a specific message and a **Use 60 minutes** correction button. Temporary local settings failures retry automatically without starting providers. Stop waits for shutdown completion, and Start retries the app lock after an exiting process releases it. [STARTUP-REPAIR.md](STARTUP-REPAIR.md) records the real Desktop launcher tests and the confirmed causes.
 
 The microphone selector defaults to **MacBook Pro Microphone** when available, ahead of an iPhone continuity microphone. Refreshing devices preserves your existing selection when it is still available.
+
+
+### Review after a session
+
+STOP ALL, a provider error, the time limit and browser disconnection stop live work
+without deleting the transcript or completed suggestions. The live display keeps the
+latest 120 transcript turns, 12 suggestions and 80 metrics; these are UI windows, not
+the new review archive. **Interview review archive → Refresh saved interviews → View
+full review** shows a saved session. Download its JSON for linked turns, all captured
+answers, timing stages, routing decisions, grounding evidence, failures and Mac/phone
+render receipts. **Download review** beside the transcript exports the full recorded
+session as readable text; the archive's JSON export includes all structured diagnostics. Delete a selected review explicitly
+on the Mac after stopping it. Clearing the current review also removes its local audio.
+New interviews preserve earlier archives. Old files from before this upgrade are
+labelled as legacy retained tails; their missing beginning cannot be reconstructed.
+
+Reviews are local owner-only files in `.runtime/reviews/`; the latest is also in
+`.runtime/session-review.json`. Changed sessions are checkpointed every five seconds
+and saved after cleanup. A crash may lose the last unsaved interval. Records include
+the selected CV/master snapshot and job setup so later edits do not change the evidence
+used to judge an old answer. They do not include provider keys or full provider prompts.
+Archive endpoints and audio downloads are authenticated and Mac-only; phone access
+remains restricted to the approved live companion. No review analysis calls a provider.
+The recorder caps each event list at 20,000 and transcript text at 20 MB. Reaching a cap
+raises a visible warning and records `limits_hit`; it never silently claims full coverage.
+Old archives are retained until you delete them. Audio and archives consume local disk.
+
+### Answer quality and conversation controls
+
+Live GPT-OSS answers still use plain text, one request per question and no automatic
+retries. General technical recommendations are hypothetical; personal experience uses
+immutable `[[E1]]` evidence slots resolved locally from the selected CV/master facts.
+A local guard withholds recognised unsupported autobiographical claims and outcome
+metrics, preserving safe advice and displaying a notice when it removes claims. This
+is conservative pattern-based protection, not a proof of truth or an independent model
+fact-check. Evidence references let you inspect the original wording. General knowledge
+and proposed approaches remain available; job requirements and prior AI suggestions
+are never career evidence. Complex unsupported wording may still evade the guard;
+review important personal claims before using them.
+
+The current question is visible separately from the answer. New topics reset it,
+coding constraints extend the active problem, clarifications replace the target, and
+conversational check-ins do not trigger answers. Each final interviewer turn has an
+**Answer this** action for requests the detector misses. These local routing heuristics
+remain fallible; full review decisions make misses inspectable. Closing invitations
+are answered as an opportunity to ask a role-relevant question. Goodbye detection shows
+a STOP ALL reminder; it does not guess that the user has authorised ending the session.
+Possible speaker echo is flagged using phrase containment/similarity and timing overlap.
+Original source-labelled text is retained; suspected echo is excluded from AI context,
+not relabelled as a different speaker. Hardware speaker separation still needs live QA.
+
+### Optional spoken-delivery review
+
+**Save local audio for spoken-delivery review** is off by default and included in the
+start confirmation. When enabled, mono PCM16 16 kHz WAVs of microphone and system audio
+stay in the review folder on this Mac (about 460 MB for both streams over two hours).
+Only enable recording when appropriate for the interview. Recording uses a separate
+bounded queue; overflow or disk errors are reported without retrying provider requests
+or blocking live capture. Recording gaps and first-chunk times are saved. STOP ALL
+closes provider streams before finalising local recording. Audio links appear in the
+Mac review viewer after stopping; deleting the review deletes its recordings.
+
+Timing records distinguish first transcript fragment, final question recognition,
+generation start/completion and answer revision. Word timestamps, when supplied by
+AssemblyAI, are relative to that audio stream; they are not wall-clock proof of the
+moment the interviewer stopped speaking. Browser receipts include local render-callback
+time and server-emission-to-receipt elapsed time (a round trip including client work),
+not one-way network latency or guaranteed physical screen paint. Replay receipts are
+separate from new answer receipts; absent acknowledgements remain unmeasured. Without
+opt-in audio, vocal tone/pace cannot be reviewed. Text word counts and estimated speaking
+times are estimates only.
+
+
+Conversation attribution is separate from CV grounding. The answer context keeps
+speaker-attributed candidate self-reports, interviewer-introduced patterns and explicit
+uncertainty beyond the recent 12-turn prompt window. A mention of Strategy, Facade or
+Saga by an interviewer is never a claim that the candidate uses them. `[[C1]]` slots
+insert attributed candidate quotes, labelled self-report rather than verified CV facts;
+`[[E1]]` slots remain verified profile/CV evidence. Recap claims such as "I covered" or
+"I use these daily" are withheld unless supported through the appropriate attributed
+source. General technical explanations and hypothetical recommendations are still allowed.
+Conversation extraction and speaker-overlap checks are conservative local heuristics;
+original source text and per-request conversation state are retained for review.

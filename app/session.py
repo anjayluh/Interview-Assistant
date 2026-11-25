@@ -2,14 +2,19 @@ import asyncio
 import json
 import time
 import re
+from importlib.metadata import version as package_version
+from pathlib import Path
 from collections import deque
 from .audio import Capture, capture_error
 from .answers import Answers
-from .questions import QuestionGate, is_question, interviewer_intent, likely_bleed
+from .questions import QuestionGate, is_question, interviewer_intent, likely_bleed, conversation_move
 from .profile import InterviewContext, terms
 from .transcription import Transcriber
 from .cost import DEFAULT_MINUTES, LiveOptions, quote
 from .provider_errors import ProviderFailure, groq_failure
+from .review import Review, valid_id
+from .review_audio import ReviewAudio
+from .conversation import conversation_state
 
 class Session:
     def __init__(self, settings, emit, capture_factory=Capture, transcriber_factory=Transcriber, answers=None):
@@ -29,6 +34,15 @@ class Session:
         self.answer_enabled = True
         self.answer_status = {'phase': 'idle'}
         self.diagnostic_sink = None
+        self.review_path = None
+        self.review = Review()
+        self.turn_firstseen = {}
+        self.wrapup = False
+        self.review_audio = None
+        self.review_io_lock = asyncio.Lock()
+        self.deleted_reviews = set()
+        self.review_warning_sent = False
+        self.saved_review_version = None
         self.capture_factory, self.transcriber_factory = capture_factory, transcriber_factory
         self.answers = answers or Answers(settings)
         self.lock = asyncio.Lock()
@@ -62,6 +76,10 @@ class Session:
 
     def emit(self, event):
         event = {**event, 'sent_at': time.time()}
+        self.review.capture(event)
+        if self.review.data['limits_hit'] and not self.review_warning_sent:
+            self.review_warning_sent = True
+            self.emit({'type':'error','message':'The local review has reached a recording limit. Its coverage report identifies missing data; live interview services remain independent.'})
         self._emit(event)
         if event['type'] == 'level':
             return
@@ -79,14 +97,69 @@ class Session:
         if once: self.metric_once.append(key)
         now = time.monotonic() if at is None else at
         item = {'stage': stage, 'role': role, 'revision': self.revision,
-                'at_ms': round((now - (self.started or now)) * 1000, 1)}
+                'at_ms': round((now - (self.started or now)) * 1000, 1),
+                'turn_key': once if isinstance(once, str) else None,
+                'turn_keys': [part['key'] for part in self.challenge]}
         self.metrics.append(item)
         self.emit({'type': 'latency', **item})
 
     def companion_state(self):
         return {'state': self.state, 'reason': self.reason, 'answer_enabled': self.answer_enabled, 'latest': self.latest, 'answers': list(self.suggestions),
                 'history': list(self.history), 'partials': list(self.partials.values()),
-                'draft': self.draft, 'answer_status': self.answer_status, 'metrics': list(self.metrics), 'sent_at': time.time()}
+                'draft': self.draft, 'answer_status': self.answer_status, 'wrapup': self.wrapup, 'review_id': self.review.data['id'], 'metrics': list(self.metrics), 'sent_at': time.time()}
+
+    def configure_review(self, path):
+        self.review_path = Path(path)
+        if not self.review_path.exists(): return
+        try:
+            if self.review_path.stat().st_size > 50_000_000: raise ValueError('Saved review too large')
+            saved = json.loads(self.review_path.read_text())
+            self.review = Review(saved=saved)
+            for row in saved.get('history', [])[-120:]:
+                if row.get('role') in ('me', 'interviewer') and isinstance(row.get('text'), str) and isinstance(row.get('key'), str):
+                    self.history.append({key:value for key,value in row.items() if key not in ('type','sent_at')} | {'original_text':row.get('original_text',row['text'])})
+            for row in saved.get('partials', [])[-2:]:
+                if row.get('role') in ('me', 'interviewer') and isinstance(row.get('text'), str) and isinstance(row.get('key'), str):
+                    self.partials[row['role']] = {key:value for key,value in row.items() if key not in ('type','sent_at')}
+            for row in saved.get('answers', [])[-12:]:
+                if isinstance(row.get('text'), str) and isinstance(row.get('question'), str):
+                    self.suggestions.append({key:value for key,value in row.items() if key != 'sent_at'})
+            self.reason = 'Previous session retained for review. Download it, clear it, or start a new interview.'
+        except (OSError, ValueError, TypeError, AttributeError):
+            self.reason = 'Saved session review could not be loaded. Its local file has been left untouched.'
+
+    async def save_review(self):
+        if not self.review_path or not (self.history or self.partials or self.suggestions or self.review.turns or self.review.data['answers'] or self.review.data['failures'] or self.review.data['metadata'].get('configured_minutes')): return
+        version = (self.review.data['id'],self.review.version)
+        if version == self.saved_review_version: return
+        from .provider_errors import save_diagnostic
+        record = self.review.snapshot()
+        try:
+            async with self.review_io_lock:
+                def write():
+                    save_diagnostic(self.review_path, record)
+                    if valid_id(record['id']):
+                        save_diagnostic(self.review_path.parent/'reviews'/(record['id']+'.json'), record)
+                task = asyncio.create_task(asyncio.to_thread(write))
+                try:
+                    await asyncio.shield(task)
+                    self.saved_review_version = version
+                except asyncio.CancelledError:
+                    await task
+                    raise
+                finally:
+                    if record['id'] in self.deleted_reviews:
+                        (self.review_path.parent/'reviews'/(record['id']+'.json')).unlink(missing_ok=True)
+                        if self.review_path.exists():
+                            latest = json.loads(self.review_path.read_text())
+                            if latest.get('id') == record['id']: self.review_path.unlink(missing_ok=True)
+        except OSError:
+            self.emit({'type': 'error', 'message': 'Review could not be saved locally. Download it before closing the app.'})
+
+    async def checkpoint_review(self):
+        while self.state == 'running':
+            await asyncio.sleep(5)
+            await self.save_review()
 
     def diagnose_audio(self, role, stage, message):
         item = {'role': role, 'stage': stage, 'message': message}
@@ -114,9 +187,9 @@ class Session:
                 'limit_minutes': self.limit_minutes,
                 'configured': {'assemblyai': bool(self.settings.assembly_key), 'groq': bool(self.settings.groq_key)},
                 'groq_verified': self.answers.verified, 'answer_enabled': self.answer_enabled,
-                'answer_status': self.answer_status, 'length': self.length}
+                'answer_status': self.answer_status, 'latest':self.latest, 'wrapup': self.wrapup, 'review_id': self.review.data['id'], 'length': self.length}
 
-    async def start(self, mic, system, length, interview=None, options=None):
+    async def start(self, mic, system, length, interview=None, options=None, record_audio=False):
         async with self.lock:
             if self.state != 'idle':
                 raise ValueError('Stop the current session or audio test first.')
@@ -132,7 +205,20 @@ class Session:
             self.answer_status = {'phase': 'idle'}
             self.length = length
             self.generation += 1
-            self.clear()
+            await self.save_review()
+            self.clear(preserve_archive=True)
+            self.review = Review({'role': interview.setup.title, 'company': interview.setup.company,
+                'cv_id': interview.setup.cv_id, 'configured_minutes': pricing.options.minutes,
+                'model': self.settings.model, 'maximum_payment_ugx': 0,
+                'audio_recorded': False, 'audio_requested': bool(record_audio),
+                'interview_setup': interview.setup.model_dump(),
+                'verified_background': {'master': interview.profile.model_dump(), 'selected_cv': interview.cv_facts},
+                'pipeline_version': 'grounded-conversation-review-v2',
+                'sdk_versions': {name:package_version(name) for name in ('groq','assemblyai')},
+                'speaker_overlap_method':'15-second overlap/proximity, six-word containment or 0.91 text similarity; suspected echo, not proven identity',
+                'coverage': 'full session text and timing events; UI shows a bounded recent window'})
+            self.turn_firstseen.clear()
+            self.wrapup = False
             self.final_keys.clear()
             self.gate = QuestionGate()
             self.interview = interview
@@ -142,6 +228,13 @@ class Session:
             self.started = time.monotonic()
             self.deadline = asyncio.get_running_loop().time() + self.limit_minutes * 60
             self.elapsed = self.channel_seconds = 0
+            self.review_audio = None
+            if record_audio and self.review_path:
+                self.review_audio = ReviewAudio(self.review_path.parent/'reviews', self.review.data['id'])
+                self.review_audio.start()
+                self.review.data['metadata']['audio_status'] = self.review_audio.stats
+                if self.review_audio.stats['error']:
+                    self.emit({'type':'error','message':'Local review audio could not start (check disk space). Live audio remains independent.'})
             self.state = 'starting'
             self.reason = 'Checking Groq model and opening audio sources…'
             self.emit(self.snapshot())
@@ -149,10 +242,12 @@ class Session:
                 async with asyncio.timeout_at(self.deadline):
                     await self._open_live(mic, system, interview.setup.keyterms)
                 self.state = 'running'
+                self.review.data['metadata']['sources'] = {role:{'device_id': mic if role=='me' else system, 'name':getattr(capture,'name','Unknown')} for role,capture in self.captures.items()}
                 self.reason = 'Listening'
                 for role in self.captures:
                     self.tasks.append(asyncio.create_task(self.pump(role)))
                 self.tasks.append(asyncio.create_task(self.watchdog(self.deadline)))
+                if self.review_path: self.tasks.append(asyncio.create_task(self.checkpoint_review()))
                 self.emit(self.snapshot())
             except TimeoutError:
                 await self._cleanup('Maximum session duration reached during startup.')
@@ -189,6 +284,8 @@ class Session:
         try:
             async for chunk in self.captures[role].chunks():
                 if self.state == 'running' and not self.deadline_reached():
+                    if self.review_audio:
+                        self.review_audio.offer(role,chunk,round((time.monotonic()-self.started)*1000,1))
                     await self.transcribers[role].send(chunk)
                 if role not in self.first_audio_roles:
                     self.first_audio_roles.add(role)
@@ -228,6 +325,7 @@ class Session:
         if not text:
             return
         key = f'{self.generation}:{role}:{event.turn_order}'
+        self.turn_firstseen.setdefault(key, time.monotonic())
         final = bool(event.end_of_turn)
         if not final and key in self.final_keys:
             return
@@ -238,19 +336,25 @@ class Session:
             and (role == 'me' or not (is_question(text) or is_question(previous['text'])))
         )
         entry = {'key': key, 'role': role, 'source': 'system_audio' if role == 'interviewer' else 'microphone',
-                 'text': text, 'final': final, 'continuation': continuation, 'received_at': time.monotonic()}
+                 'text': text, 'final': final, 'continuation': continuation, 'received_at': time.monotonic(),
+                 'first_seen_at': self.turn_firstseen[key],
+                 'provider_audio_end_ms': getattr(event.words[-1], 'end', None) if getattr(event,'words',None) else None,
+                 'provider_audio_start_ms': getattr(event.words[0], 'start', None) if getattr(event,'words',None) else None,
+                 'end_of_turn_confidence': getattr(event,'end_of_turn_confidence',None)}
         self.measure('first_transcription_fragment', role, once=key)
         others = [*self.history, *self.partials.values()]
         if role == 'me':
             match = next((other for other in reversed(others) if other['role'] == 'interviewer'
-                          and likely_bleed(text, other['text'], abs(entry['received_at'] - other.get('received_at', 0)))), None)
+                          and likely_bleed(text, other['text'], max(0, max(entry['first_seen_at'], other.get('first_seen_at', other.get('received_at', 0))) - min(entry['received_at'], other.get('received_at', 0))))), None)
             if match:
                 entry['duplicate_of'] = match['key']
+                entry['speaker_confidence'] = 'suspected_echo'
                 self.measure('likely_speaker_bleed', 'me', once=key)
         else:
             for other in others:
-                if other['role'] == 'me' and likely_bleed(text, other['text'], abs(entry['received_at'] - other.get('received_at', 0))):
+                if other['role'] == 'me' and likely_bleed(text, other['text'], max(0, max(entry['first_seen_at'], other.get('first_seen_at', other.get('received_at', 0))) - min(entry['received_at'], other.get('received_at', 0)))):
                     other['duplicate_of'] = key
+                    other['speaker_confidence'] = 'suspected_echo'
                     self.measure('likely_speaker_bleed', 'me', once=other['key'])
                     self.emit({'type': 'transcript', **other})
         self.emit({'type': 'transcript', **entry})
@@ -272,8 +376,22 @@ class Session:
                 self.schedule_question()
                 return
             intent = interviewer_intent(text)
+            move = conversation_move(text)
+            self.emit({'type': 'routing', 'turn_key': key, 'intent': intent, 'revision': self.revision,
+                       'action': 'new_question' if intent in ('question','coding') else intent,
+                       'target_revision': self.revision + 1 if intent in ('question','coding','clarification','instruction') else None})
+            if intent == 'goodbye':
+                self.wrapup = True
+                self.emit(self.snapshot())
+                return
+            if intent == 'check_in': return
+            if intent == 'clarification' and self.challenge:
+                self.challenge = [{'key':key, 'text':text}]
+                self.challenge_intent = 'clarification'
+                self.schedule_question()
+                return
             if intent in ('question', 'coding') and self.gate.claim(key, text):
-                followup = bool(self.challenge and re.match(r'(?:and |also |what if|how about|but |instead)', text, re.I))
+                followup = bool(self.challenge_intent == 'coding' and self.challenge and re.match(r'(?:and |also |what if|how about|but |instead)', text, re.I) and not re.search(r'other (?:thing|project)|outside|tech stack|design patterns', text, re.I))
                 if not followup:
                     self.challenge_blocked = False
                     self.challenge = list(self.preface)
@@ -291,7 +409,7 @@ class Session:
                     self.preface_overflow = True
                 else:
                     self.preface.append({'key': key, 'text': text})
-            elif intent == 'instruction' and self.challenge and not self.challenge_blocked:
+            elif intent == 'instruction' and self.challenge_intent == 'coding' and self.challenge and not self.challenge_blocked:
                 self.challenge.append({'key': key, 'text': text})
                 self.schedule_question()
             elif (intent == 'statement' and self.challenge_intent == 'coding' and self.challenge and not self.challenge_blocked
@@ -303,14 +421,16 @@ class Session:
     def schedule_question(self):
         self.latest = '\n'.join(part['text'] for part in self.challenge)
         if not self.answer_enabled: return
+        previous_revision = self.revision
         self.revision += 1
         self.measure('question_finalised', 'interviewer')
+        self.emit({'type':'question_target','question':self.latest,'revision':self.revision,'turn_keys':[part['key'] for part in self.challenge]})
         if self.question_task and not self.question_task.done(): self.question_task.cancel()
         self.pending_questions.clear()
         previous = self.answer_task
         if previous and not previous.done(): previous.cancel()
         self.draft = None
-        self.emit({'type': 'answer_superseded', 'revision': self.revision})
+        self.emit({'type': 'answer_superseded', 'revision': self.revision, 'superseded_revision':previous_revision})
         if len(self.latest) > 18000 or len(self.challenge) > 120:
             self.challenge_blocked = True
             self.emit({'type': 'error', 'message': 'Challenge exceeds the live context limit. Review and submit a shorter complete written problem.'})
@@ -326,6 +446,11 @@ class Session:
             raise ValueError('Start an authorised live session first.')
         if not self.answer_enabled:
             raise ValueError('Groq suggestions are paused after a failure. Stop, correct the reported cause, then authorise a new session; no automatic retry is made.')
+        if question and question != self.latest:
+            self.latest = question
+            self.challenge = []
+            self.revision += 1
+            self.emit({'type':'question_target','question':question,'revision':self.revision,'source':'manual'})
         question = question or self.latest
         if not question:
             raise ValueError('No completed interviewer speech yet.')
@@ -338,7 +463,7 @@ class Session:
         while self.pending_questions and self.state == 'running' and not self.deadline_reached():
             question = self.pending_questions.popleft()
             revision = self.revision
-            recent = [entry for entry in self.history if not entry.get('duplicate_of')][-8:]
+            recent = [entry for entry in self.history if not entry.get('duplicate_of')][-12:]
             question_terms = terms(question)
             previous = [item for item in self.suggestions
                         if len(question_terms & terms(item['question'])) >= 2
@@ -347,10 +472,13 @@ class Session:
                 'question': question[:18000],
                 'interviewer_intent': self.challenge_intent or interviewer_intent(question),
                 'conversation': [{'speaker': x['role'], 'source': x.get('source'), 'text': x['text'][:250]} for x in recent],
-                'relevant_prior_suggestions': [{'question': x['question'][:250], 'text': x['text'][:450]}
-                                               for x in previous],
+                'relevant_prior_suggestions': [],
+                'conversation_move': conversation_move(question),
+                'conversation_state': conversation_state(list(self.review.turns.values()), question),
                 'professional_context': json.loads((self.interview or InterviewContext()).for_question(question)),
             }, ensure_ascii=False)
+            from .grounding import evidence_bank
+            self.review.append('requests', {'revision':revision,'evidence_bank':evidence_bank(json.loads(context)['professional_context']), 'conversation_state':json.loads(context)['conversation_state'], 'turn_keys':[part['key'] for part in self.challenge]})
             self.measure('answer_generation_start')
             self.answer_status = {'phase': 'generating'}
             self.emit({'type': 'groq', 'status': 'generating'})
@@ -371,8 +499,16 @@ class Session:
                 self.draft = None
                 self.measure('answer_complete')
                 item = {'type': 'answer', 'question': question, 'revision': revision, **suggestion}
+                item['turn_keys'] = [part['key'] for part in self.challenge]
+                words = re.findall(r"\b[\w’']+\b",item['text'])
+                item['style_metrics'] = {'word_count':len(words), 'estimated_spoken_seconds_at_150_wpm':round(len(words)/2.5,1), 'estimate_only':True}
+                opening = ' '.join(words[:6]).lower()
+                item['style_metrics']['repeated_opening'] = any(' '.join(re.findall(r"\b[\w’']+\b",prior['text'])[:6]).lower()==opening for prior in list(self.suggestions)[-3:])
+                item['generated_at_ms'] = next((m['at_ms'] for m in reversed(self.metrics) if m['stage'] == 'answer_complete'), None)
                 self.suggestions.append(item)
                 self.emit(item)
+                if isinstance(self.answers, Answers):
+                    self.review.append('requests', {'revision':revision, **self.answers.last_request})
                 self.answer_status = {'phase': 'ready'}
                 self.emit({'type': 'groq', 'status': 'ready'})
                 self.emit(self.snapshot())
@@ -383,6 +519,7 @@ class Session:
                     self.fatal('Maximum session duration reached.')
                     return
                 failure = groq_failure(exc, getattr(self.answers, 'last_request', {}))
+                self.review.append('requests', {'revision':revision, **failure.diagnostic.get('request',{})})
                 if failure.diagnostic['category'] == 'invalid_response' and failure.diagnostic['http_status'] not in (401, 402, 403, 429):
                     failure = ProviderFailure(str(failure) + ' Suggestions remain available for the next question.', failure.diagnostic)
                     await self.record_answer_failure(failure, pause=False)
@@ -405,7 +542,7 @@ class Session:
         self.draft = None
         self.answer_status = {'phase': 'failed', 'message': str(failure), 'diagnostic': failure.diagnostic}
         self.emit({'type': 'groq', 'status': 'error', 'message': str(failure), 'diagnostic': failure.diagnostic})
-        self.emit({'type': 'error', 'provider': 'groq', 'message': str(failure), 'diagnostic': failure.diagnostic})
+        self.emit({'type': 'error', 'provider': 'groq', 'revision':self.revision, 'message': str(failure), 'diagnostic': failure.diagnostic})
         if self.diagnostic_sink:
             try:
                 await asyncio.to_thread(self.diagnostic_sink, failure.diagnostic)
@@ -493,7 +630,12 @@ class Session:
         await asyncio.gather(*pending, return_exceptions=True)
         self.answer_task = None
         if self.answer_status.get('phase') != 'failed': self.answer_status = {'phase': 'idle'}
-        self.clear()
+        # Stop provider work independently of the user's retained session review.
+        self.question_task = None
+        self.pending_questions.clear()
+        self.draft = None
+        self.challenge = []
+        self.preface.clear()
         self.final_keys.clear()
         self.gate = QuestionGate()
         self.interview = None
@@ -512,13 +654,21 @@ class Session:
         self.transcribers.clear()
         self.captures.clear()
         self.tasks.clear()
+        if self.review_audio:
+            await self.review_audio.close()
+            self.review.data['metadata']['audio_recorded'] = self.review_audio.stats['recorded']
+            if self.review_audio.stats['error'] or self.review_audio.stats['dropped_chunks']:
+                self.emit({'type':'error','message':'Local review audio is incomplete; see its recording diagnostics. Live provider capture was not retried.'})
+            self.review_audio = None
         self.testing = False
         self.state = 'idle'
+        self.emit(self.snapshot())
+        await self.save_review()
         if any(isinstance(x, BaseException) for x in results):
             self.emit({'type': 'error', 'message': 'Cleanup reported an error. Check provider dashboards and audio devices before restarting.'})
         self.emit(self.snapshot())
 
-    def clear(self):
+    def clear(self, preserve_archive=False):
         if self.question_task and not self.question_task.done(): self.question_task.cancel()
         self.question_task = None
         self.challenge = []
@@ -539,6 +689,17 @@ class Session:
         self.suggestions.clear()
         self.partials.clear()
         self.latest = ''
+        if self.review_path:
+            self.review_path.unlink(missing_ok=True)
+            if not preserve_archive and valid_id(self.review.data['id']):
+                self.deleted_reviews.add(self.review.data['id'])
+                (self.review_path.parent / 'reviews' / (self.review.data['id'] + '.json')).unlink(missing_ok=True)
+                for role in ('me','interviewer'):
+                    (self.review_path.parent/'reviews'/(self.review.data['id']+'-'+role+'.wav')).unlink(missing_ok=True)
+        self.review = Review()
+        self.review_warning_sent = False
+        self.wrapup = False
+        self.turn_firstseen.clear()
         self.emit({'type': 'clear'})
 
 

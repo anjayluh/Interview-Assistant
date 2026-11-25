@@ -3,10 +3,15 @@ function answerCard(x) {
   card.dataset.revision = x.revision ?? '';
   const p = document.createElement('p'); p.className = 'response'; p.textContent = x.text;
   card.append(p);
+  if (x.grounding_warning) {
+    const note = document.createElement('p'); note.textContent = x.grounding_warning; note.setAttribute?.('role','status'); card.append(note);
+  }
   const more = document.createElement('details');
   const summary = document.createElement('summary'); summary.textContent = 'Evidence, code and deeper explanation'; more.append(summary);
   for (const [label, text] of [
     ['Category', x.category], ['Experience', x.experience], ['Verified source example', x.example],
+    ['What you said earlier · self-report', (x.conversation_support || []).map(e => e.text).join('\n')],
+    ['Verified evidence', (x.evidence || []).map(e => e.id + ': ' + e.text).join('\n')],
     ['Talking points', x.talking_points], ['Details', x.details],
     ['Competency', [x.competency, x.secondary_competencies].filter(Boolean).join(' · ')], ['Likely follow-ups', x.follow_ups],
   ]) {
@@ -253,6 +258,8 @@ function renderLatency(metrics) {
         latency = x.metrics || []; renderLatency(latency);
         if (x.draft) handle(x.draft);
         if (x.answer_status) answerStatus(x.answer_status);
+        get('phone-wrapup').hidden = !x.wrapup || x.state !== 'running';
+        get('phone-current-question').textContent = x.latest ? 'Current interviewer question: ' + x.latest : '';
         get('phone-status').textContent = sessionLabel(x);
       } else if (x.type === 'transcript') sourceTurn(x);
       else if (x.type === 'groq') answerStatus({phase: x.status === 'error' ? 'failed' : x.status, message: x.message, diagnostic: x.diagnostic});
@@ -267,7 +274,11 @@ function renderLatency(metrics) {
       } else if (x.type === 'answer_superseded') {
         get('phone-draft').hidden = true;
         get('phone-answer-status').textContent = 'Previous suggestions remain below. Preparing an answer to the latest interviewer question and instructions…';
+      } else if (x.type === 'question_target') {
+        get('phone-current-question').textContent = 'Current interviewer question: ' + x.question;
       } else if (x.type === 'state') {
+        get('phone-wrapup').hidden = !x.wrapup || x.state !== 'running';
+        if (x.state === 'idle') get('phone-draft').hidden = true;
         get('phone-status').textContent = sessionLabel(x);
         if (x.answer_status) answerStatus(x.answer_status);
       }
@@ -297,6 +308,8 @@ function renderLatency(metrics) {
             const line = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 1);
             if (!line) continue;
             const event = JSON.parse(line); handle(event);
+            if (event.type === 'companion_snapshot') for (const saved of event.answers || []) requestAnimationFrame(() => api('companion/receipt', 'POST', {revision:saved.revision,render_ms:performance.now()-received,replay:true}).catch(() => {}));
+            if (event.type === 'answer') requestAnimationFrame(() => api('companion/receipt', 'POST', {revision:event.revision,render_ms:performance.now()-received,replay:false}).catch(() => {}));
             if (event.type !== 'keepalive') {
               const handshake = first ? `Connection to first snapshot: ${(performance.now() - started).toFixed(1)} ms. ` : '';
               first = false;

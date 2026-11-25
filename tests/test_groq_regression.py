@@ -122,8 +122,8 @@ def test_failure_status_survives_cleanup_and_reconnect_snapshot():
         assert session.companion_state()['answer_status']['diagnostic']['http_status'] == 429
         types = [e['type'] for e in events]
         error_index = next(i for i,e in enumerate(events) if e['type']=='groq' and e.get('status')=='error')
-        clear_index = max(i for i,e in enumerate(events) if e['type']=='clear')
-        assert error_index < clear_index
+        assert error_index > 0
+        assert not any(e['type'] == 'clear' for e in events[error_index:])
         assert session.snapshot()['answer_status']['phase'] == 'failed'
     asyncio.run(check())
 
@@ -172,7 +172,7 @@ def test_actual_sdk_stream_json_validation_error_is_not_an_application_bug():
 
 
 @pytest.mark.parametrize('minutes', [15, 60, 120])
-def test_strict_gpt_oss_recovers_on_next_question_and_keeps_configured_deadline(minutes):
+def test_live_text_gpt_oss_recovers_on_next_question_and_keeps_configured_deadline(minutes):
     async def check():
         session, events, _ = make_session()
         requests = []
@@ -182,14 +182,14 @@ def test_strict_gpt_oss_recovers_on_next_question_and_keeps_configured_deadline(
             body = json.loads(request.content)
             requests.append(body)
             assert not body.get('stream', False)
-            assert body['response_format']['type'] == 'json_schema'
-            assert body['response_format']['json_schema']['strict'] is True
+            assert body['response_format']['type'] == 'text'
+            assert body['include_reasoning'] is False
             assert body['model'] == 'openai/gpt-oss-20b'
             assert body['service_tier'] == 'on_demand'
             if len(requests) == 2:
                 return httpx.Response(400, json={'error': {'code': 'json_validate_failed', 'type': 'invalid_request_error', 'message': 'PRIVATE'}})
             return httpx.Response(200, json={'id':'offline', 'object':'chat.completion', 'created':1,
-                'model':body['model'], 'choices':[{'index':0,'message':{'role':'assistant','content':json.dumps(payload())},'finish_reason':'stop'}]})
+                'model':body['model'], 'choices':[{'index':0,'message':{'role':'assistant','content':payload()['text']},'finish_reason':'stop'}]})
         sdk = AsyncGroq(api_key='mock', http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)), max_retries=0)
         session.answers = Answers(Settings(model='openai/gpt-oss-20b'), sdk)
         options = live_options(); options.minutes = minutes
@@ -224,3 +224,59 @@ def test_strict_gpt_oss_recovers_on_next_question_and_keeps_configured_deadline(
             loop.time = clock
             await session.stop()
     asyncio.run(check())
+
+
+@pytest.mark.parametrize('content', [
+    "I'd start with the business constraints and measure the bottleneck.",
+    'I would use a set.\n```python\ndef first_duplicate(xs):\n    seen = set()\n    for x in xs:\n        if x in seen: return x\n        seen.add(x)\n```\nThis takes O(n) time and O(n) space.',
+])
+def test_actual_sdk_live_spoken_answer_needs_no_json_and_keeps_code(content):
+    async def check():
+        requests = []
+        def respond(request):
+            body = json.loads(request.content); requests.append(body)
+            assert body['response_format'] == {'type': 'text'}
+            assert 'json_schema' not in json.dumps(body)
+            assert not body.get('stream')
+            assert body['include_reasoning'] is False
+            assert body['max_completion_tokens'] == 1300
+            return httpx.Response(200, json={'id':'offline', 'object':'chat.completion', 'created':1,
+                'model':body['model'], 'choices':[{'index':0,'message':{'role':'assistant','content':content,
+                'reasoning':'PRIVATE reasoning must never appear'},'finish_reason':'stop'}]})
+        sdk = AsyncGroq(api_key='mock', http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)), max_retries=0)
+        service = Answers(Settings(), sdk); service.verified = True
+        result = await service.generate(context(), 'medium', on_text=lambda x: None)
+        assert result['text'] and 'PRIVATE' not in json.dumps(result)
+        if '```' in content:
+            assert 'def first_duplicate' in result['code'] and result['language'] == 'python'
+            assert 'O(n)' in result['text'] and 'def first_duplicate' not in result['text']
+        assert result['example'] == '' and result['experience'] == 'General recommendation'
+        assert len(requests) == 1
+        await service.close()
+    asyncio.run(check())
+
+
+def test_formatting_failure_does_not_clear_transcripts_or_previous_answers():
+    async def check():
+        from unittest.mock import AsyncMock
+        session, events, answers = make_session()
+        await session.start(0,1,'medium',options=live_options())
+        session.turn('interviewer', turn('How would you design a queue?',1))
+        await session.question_task; await session.answer_task
+        history = list(session.history); suggestions = list(session.suggestions)
+        answers.generate = AsyncMock(side_effect=ProviderFailure('Invalid output', {'category':'invalid_response','http_status':400}))
+        session.turn('interviewer', turn('How would you test a queue?',2))
+        await session.question_task; await session.answer_task
+        assert session.state == 'running' and session.answer_enabled
+        assert len(session.history) == len(history) + 1
+        assert list(session.suggestions) == suggestions
+        assert session.companion_state()['history'] and session.companion_state()['answers']
+        assert not any(event['type'] == 'clear' for event in events[events.index(next(e for e in events if e['type']=='answer')) + 1:])
+        await session.stop()
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize('content', ['', '<think>private reasoning</think>Answer', '{"text":"JSON"}', 'Code: ```python\nunfinished'])
+def test_live_spoken_parser_rejects_empty_reasoning_json_and_unfinished_code(content):
+    from app.answers import parse_spoken_answer
+    with pytest.raises(ValueError): parse_spoken_answer(content)

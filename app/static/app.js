@@ -1,7 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 let socket, retry = 0, timer, elapsed = 0, usage = 0, running = false, connected = false;
-let currentState = 'idle';
+let currentState = 'idle', currentReviewId = null;
 let quoteData, quoteTimer, quoteRequest = 0, heartbeat;
 let quoteFailures = 0;
 let keysReady = false, answersEnabled = true;
@@ -68,6 +68,8 @@ function command(data) {
 }
 function buttons() {
   const idle = currentState === 'idle', ready = connected && idle;
+  $('clear').disabled = !ready;
+  $('clear').title = idle ? '' : 'Stop the session before deleting its review.';
   const reasons = [];
   if (!connected) reasons.push('Connect to the local backend.');
   if (!idle) reasons.push(currentState === 'testing' ? 'Wait for the audio test to finish, or press STOP ALL.' : 'A session is already active.');
@@ -97,12 +99,15 @@ function clock() {
 function idleMode(mode) { return mode === 'idle' || mode === 'testing'; }
 function state(s) {
   currentState = s.state;
+  currentReviewId = s.review_id || currentReviewId;
+  $('wrapup-notice').hidden = !s.wrapup || s.state !== 'running';
   answersEnabled = s.answer_enabled !== false;
   if (s.answer_status?.phase === 'failed') {
     error(s.answer_status.message);
     $('provider-error-diagnostic').textContent = JSON.stringify(s.answer_status.diagnostic, null, 2);
   }
   if (!idleMode(s.state)) hideAudioDiagnostics();
+  if (s.state === 'idle') { answerDraft?.remove(); answerDraft = null; }
   running = s.state === 'running'; elapsed = s.duration; usage = s.channel_seconds;
   if (running || s.state === 'starting') interviewRan = true;
   if (currentState === 'idle' && interviewRan) {
@@ -138,7 +143,7 @@ function state(s) {
 }
 function transcript(x) {
   if (!['me', 'interviewer'].includes(x.role)) return;
-  if (x.duplicate_of) { rows.get(x.key)?.remove(); rows.delete(x.key); return; }
+  if (x.duplicate_of) { rows.get(x.key)?.remove(); rows.delete(x.key); $('speaker-note').textContent = 'Possible interviewer echo on your microphone. Original source text is retained in the full review.'; return; }
   const source = $(`transcript-${x.role}`);
   let row = rows.get(x.key);
   if (!row) {
@@ -149,6 +154,11 @@ function transcript(x) {
   row.dataset.source = x.source || x.role;
   row.className = `utterance ${x.role} ${x.final ? '' : 'partial'} ${x.continuation ? 'continuation' : ''}`;
   row.textContent = x.text;
+  row.dataset.text = x.text;
+  if (x.role === 'interviewer' && x.final) {
+    const button = document.createElement('button'); button.className = 'quiet'; button.textContent = 'Answer this';
+    button.onclick = () => command({cmd:'answer', question:x.text}); row.append(button);
+  }
   while (rows.size > 122) { const key = rows.keys().next().value; rows.get(key).remove(); rows.delete(key); }
   source.scrollTop = source.scrollHeight;
 }
@@ -173,12 +183,19 @@ function connect() {
     buttons(); refreshQuote();
   };
   socket.onmessage = e => {
+    const received = performance.now();
     const x = JSON.parse(e.data);
     if (x.type === 'heartbeat') { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({cmd: 'heartbeat'})); }
-    else if (x.type === 'snapshot') { clear(); state(x.state); [...x.history, ...x.partials].forEach(transcript); x.answers.forEach(answer); }
+    else if (x.type === 'snapshot') { clear(); state(x.state); [...x.history, ...x.partials].forEach(transcript); x.answers.forEach(answer);
+      $('current-question').textContent = x.state.latest ? 'Current interviewer question: ' + x.state.latest : '';
+      for (const saved of x.answers) requestAnimationFrame(() => command({cmd:'rendered',revision:saved.revision,render_ms:performance.now()-received,replay:true})); }
     else if (x.type === 'state') state(x);
     else if (x.type === 'transcript') transcript(x);
-    else if (x.type === 'answer') answer(x);
+    else if (x.type === 'answer') {
+      answer(x);
+      requestAnimationFrame(() => command({cmd:'rendered',revision:x.revision,render_ms:performance.now()-received,replay:false}));
+    }
+    else if (x.type === 'question_target') $('current-question').textContent = 'Current interviewer question: ' + x.question;
     else if (x.type === 'answer_delta') {
       if (!answerDraft) { answerDraft = document.createElement('article'); answerDraft.className = 'answer-card response'; $('answers').prepend(answerDraft); }
       answerDraft.textContent = 'AI draft · still generating\n' + x.text;
@@ -299,18 +316,21 @@ $('start').onclick = async () => {
   if (!data?.quote_id || currentState !== 'idle' || !connected) return;
   const consentOptions = liveOptions();
   const consentKeyterms = $('keyterms').checked;
-  const consentFingerprint = JSON.stringify({live: consentOptions, keyterms: consentKeyterms});
+  const recordAudio = $('record-review-audio').checked;
+  const consentFingerprint = JSON.stringify({live: consentOptions, keyterms: consentKeyterms, record_audio:recordAudio});
   if (!window.confirm(
     'Start a ' + data.minutes + '-minute live session using AssemblyAI trial credits and Groq Free capacity? '
     + 'Maximum user expenditure is UGX 0. The session stops if a provider rejects access or reports exhausted credits or a rate limit.'
+    + (recordAudio ? '\nLocal audio recording is enabled for both sources and stays on this Mac.' : '\nLocal audio recording is off.')
+    + (rows.size || $('answers').querySelector('article') ? '\n\nStarting a new interview resets the live display. The previous session remains in the local review archive.' : '')
   )) return;
-  if (consentFingerprint !== JSON.stringify({live: liveOptions(), keyterms: $('keyterms').checked})) {
+  if (consentFingerprint !== JSON.stringify({live: liveOptions(), keyterms: $('keyterms').checked, record_audio:$('record-review-audio').checked})) {
     showQuote(null);
     return error('Session settings changed. Review them again.');
   }
   hideAudioDiagnostics();
   command({cmd: 'start', mic: Number($('mic').value), system: Number($('system').value),
-    length: $('length').value, quote_id: data.quote_id, live: {...consentOptions, confirmed: true},
+    length: $('length').value, record_audio:recordAudio, quote_id: data.quote_id, live: {...consentOptions, confirmed: true},
     interview: {
       cv_id: $('interview-cv').dataset.loaded ? $('interview-cv').value : null,
       title: $('job-title').value, company: $('job-company').value, description: $('job-description').value,
@@ -326,10 +346,29 @@ $('stop').onclick = async () => {
     command({cmd: 'stop'});
   }
 };
+$('wrapup-stop').onclick = () => $('stop').onclick();
 $('test-mic').onclick = () => testAudio('me', 'mic');
 $('test-system').onclick = () => testAudio('interviewer', 'system');
 $('answer').onclick = () => command({cmd:'answer'});
-$('clear').onclick = () => command({cmd:'clear'});
+$('clear').onclick = () => {
+  if (window.confirm('Clear the transcript and suggested answers from this Mac and the paired phone? The saved local review will also be deleted. This cannot be undone.')) command({cmd:'clear'});
+};
+$('download-review').onclick = async () => {
+  try {
+    if (!currentReviewId) throw new Error('Wait for the local session review to load.');
+    const response = await fetch('/api/reviews/' + encodeURIComponent(currentReviewId));
+    if (!response.ok) throw new Error('The full review could not be downloaded. The visible transcript has been left untouched.');
+    const review = await response.json();
+    const text = ['INTERVIEW REVIEW', JSON.stringify(review.metadata, null, 2),
+      'TRANSCRIPT', ...review.history.map(row => row.role.toUpperCase() + (row.duplicate_of ? ' [suspected echo]' : '') + ': ' + row.text),
+      'UNFINISHED TURNS', ...(review.partials || []).map(row => row.role.toUpperCase() + ': ' + row.text),
+      'SUGGESTED ANSWERS', ...review.answers.map(item => 'QUESTION: ' + item.question + '\nANSWER: ' + item.text + (item.code ? '\nCODE: ' + item.code : '')),
+      'REVIEW COVERAGE AND TIMING', JSON.stringify(review.analysis, null, 2)].join('\n\n');
+    const url = URL.createObjectURL(new Blob([text], {type:'text/plain;charset=utf-8'}));
+    const link = document.createElement('a'); link.href = url; link.download = 'interview-review-' + new Date().toISOString().slice(0,10) + '.txt';
+    document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url),1000);
+  } catch (err) { error(err.message); }
+};
 $('length').onchange = () => command({cmd:'length',length:$('length').value});
 $('mic').onchange = $('system').onchange = buttons;
 $('refresh').onclick = refresh;
@@ -348,5 +387,46 @@ window.addEventListener('pageshow', event => {
 $('reset-live-duration').onclick = () => {
   $('live-minutes').value = '60';
   refreshQuote();
+};
+async function loadReviews() {
+  try {
+    const response = await fetch('/api/reviews');
+    if (!response.ok) throw new Error('Saved reviews could not be loaded.');
+    const reviews = await response.json();
+    $('review-select').replaceChildren(...reviews.map(x => new Option((x.metadata.company || 'Interview') + ' · ' + x.created_at + ' · ' + x.turns + ' turns', x.id)));
+    $('review-message').textContent = reviews.length ? 'Choose a review to inspect or download.' : 'No saved interviews yet.';
+  } catch (err) { $('review-message').textContent = err.message; }
+}
+async function selectedReview() {
+  const id = $('review-select').value;
+  if (!id) throw new Error('Choose a saved interview first.');
+  const response = await fetch('/api/reviews/' + encodeURIComponent(id));
+  if (!response.ok) throw new Error('Review could not be loaded.');
+  return response.json();
+}
+$('review-refresh').onclick = loadReviews;
+$('review-open').onclick = async () => {
+  try {
+    const review = await selectedReview();
+    $('review-content').textContent = JSON.stringify(review.analysis, null, 2) + '\n\n' + review.history.map(x => x.role.toUpperCase() + (x.duplicate_of ? ' [suspected echo]' : '') + ': ' + x.text).join('\n\n') + '\n\nSUGGESTIONS\n\n' + review.answers.map(x => 'QUESTION: ' + x.question + '\nANSWER: ' + x.text + (x.code ? '\nCODE: ' + x.code : '')).join('\n\n');
+    $('review-message').textContent = 'Full review loaded. Download JSON for all diagnostics and links.';
+    $('review-audio').replaceChildren();
+    if (review.metadata.audio_recorded) for (const role of ['me','interviewer']) {
+      const link = document.createElement('a'); link.href = '/api/reviews/' + review.id + '/audio/' + role; link.textContent = 'Download ' + role + ' local audio '; link.download = ''; $('review-audio').append(link);
+    }
+  } catch (err) { $('review-message').textContent = err.message; }
+};
+$('review-export').onclick = async () => {
+  try {
+    const review = await selectedReview(), url = URL.createObjectURL(new Blob([JSON.stringify(review, null, 2)], {type:'application/json'}));
+    const link = document.createElement('a'); link.href = url; link.download = 'interview-review-' + review.id + '.json'; document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (err) { $('review-message').textContent = err.message; }
+};
+$('review-delete').onclick = async () => {
+  const id = $('review-select').value;
+  if (!id || !window.confirm('Delete this saved review and any local audio? This cannot be undone.')) return;
+  const response = await fetch('/api/reviews/' + encodeURIComponent(id), {method:'DELETE'});
+  if (!response.ok) { $('review-message').textContent = 'Stop its session before deleting the review.'; return; }
+  $('review-content').textContent = ''; $('review-audio').replaceChildren(); loadReviews();
 };
 connect(); refresh(); refreshQuote();

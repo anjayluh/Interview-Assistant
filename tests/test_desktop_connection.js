@@ -5,7 +5,7 @@ const connect=src.slice(src.indexOf('function connect()'),src.indexOf('async fun
 const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{textContent:'',replaceChildren(){throw Error('Completed answers must remain visible')}});return nodes.get(id)};
 let sent=[],intervals=0;
 class Socket {static OPEN=1;constructor(){this.readyState=1}send(x){sent.push(JSON.parse(x))}}
-const env={WebSocket:Socket,location:{host:'127.0.0.1:8765'},client:'test-client',socket:null,
+const env={performance,WebSocket:Socket,location:{host:'127.0.0.1:8765'},client:'test-client',socket:null,
  $:get,encodeURIComponent,connected:false,retry:0,heartbeat:null,timer:null,
  clearInterval(){},setInterval(){intervals++;return 1},buttons(){},refreshQuote(){},
  answerDraft:null};
@@ -15,3 +15,7 @@ env.socket.onmessage({data:JSON.stringify({type:'heartbeat'})});
 assert.equal(sent.length,1);assert.equal(sent[0].cmd,'heartbeat');
 env.socket.onmessage({data:JSON.stringify({type:'answer_superseded',revision:2})});
 console.log('Desktop connection passed: server heartbeat answered without interval timers, completed answers retained.');
+
+env.answer=()=>{};env.requestAnimationFrame=fn=>fn();env.command=cmd=>sent.push(cmd);
+env.socket.onmessage({data:JSON.stringify({type:'answer',revision:3,text:'A safe answer'})});
+assert.equal(sent.at(-1).cmd,'rendered');assert.equal(sent.at(-1).revision,3);assert.equal(sent.at(-1).replay,false);

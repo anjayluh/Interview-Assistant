@@ -23,12 +23,32 @@ def health():
     except (OSError, ValueError):
         return False
 
+def browser_url():
+    if '--interview-preset' not in sys.argv:
+        return URL
+    from urllib.parse import urlencode
+    from app.profile import InterviewSetup
+    from app.cost import LiveOptions
+    try:
+        path = Path(sys.argv[sys.argv.index('--interview-preset') + 1])
+        if path.stat().st_size > 30000:
+            raise ValueError('Preset too large')
+        preset = json.loads(path.read_text())
+        setup = InterviewSetup.model_validate(preset['interview'])
+        minutes = LiveOptions(minutes=preset['minutes']).minutes
+        payload = {'interview': setup.model_dump(), 'minutes': minutes}
+    except (OSError, ValueError, KeyError, IndexError):
+        raise SystemExit('The interview shortcut settings could not be loaded. Check its preset file.') from None
+    return URL + '/#' + urlencode({'interview': json.dumps(payload, ensure_ascii=False)})
+
+
 def browser():
     if '--no-browser' in sys.argv:
         return
-    result = subprocess.run(['/usr/bin/open', '-a', 'Brave Browser', URL], capture_output=True)
+    target = browser_url()
+    result = subprocess.run(['/usr/bin/open', '-a', 'Brave Browser', target], capture_output=True)
     if result.returncode:
-        print('Brave could not open. Open this address yourself: ' + URL)
+        print('Brave could not open. Use the desktop shortcut again after opening Brave.')
 
 def acquire_or_existing(lock, timeout=15):
     """A stopped process can release its lock after its listening socket closes."""

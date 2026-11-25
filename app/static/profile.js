@@ -177,5 +177,27 @@
     message('CV version deleted.');
   });
 
-  api().then(populate).catch(() => error('Professional profile could not be loaded. Restart the app and try again.'));
+  function applyInterviewPreset() {
+    const encoded = new URLSearchParams(location.hash.slice(1)).get('interview');
+    if (!encoded) return;
+    const preset = JSON.parse(encoded), setup = preset.interview;
+    if (!setup || !Number.isInteger(preset.minutes) || preset.minutes < 5 || preset.minutes > 120)
+      throw new Error('Invalid interview shortcut settings.');
+    if (!data.cvs.some(cv => cv.id === setup.cv_id))
+      throw new Error('The CV saved for this shortcut is missing. Select it in Interview setup.');
+    const limits = {title: 200, company: 200, description: 10000, notes: 4000, research: 5000};
+    for (const [key, limit] of Object.entries(limits)) {
+      if (typeof setup[key] !== 'string' || setup[key].length > limit)
+        throw new Error('Invalid interview shortcut settings.');
+    }
+    $('interview-cv').value = setup.cv_id;
+    for (const key of Object.keys(limits)) $('job-' + key).value = setup[key];
+    $('live-minutes').value = String(preset.minutes);
+    // Keep the preset duration through the browser's fresh-page restoration event.
+    $('live-minutes').defaultValue = String(preset.minutes);
+    showSelection();
+    $('notice').textContent = setup.company + ' · ' + setup.title + ' · ' + preset.minutes + ' minutes. Review audio inputs, then authorise when ready.';
+    refreshQuote();
+  }
+  api().then(next => { populate(next); applyInterviewPreset(); }).catch(err => error(err.message || 'Professional profile could not be loaded. Restart the app and try again.'));
 })();

@@ -33,6 +33,7 @@
     <div><label for="live-minutes">Session limit (minutes)</label><input id="live-minutes" type="number" min="5" max="120" step="1" value="60"><button id="reset-live-duration" type="button" class="quiet">Use 60 minutes</button><small>Choose 5–120 minutes. A new page starts at 60 minutes.</small></div>
     <div><label for="live-cap">Maximum user expenditure (UGX)</label><input id="live-cap" type="number" value="0" readonly></div>
   </div>
+  <p><label><input id="record-review-audio" type="checkbox"> Save local audio for spoken-delivery review (optional, off by default)</label><small>Records both sources on this Mac only, up to about 460 MB for two hours. Only enable recording when appropriate for your interview. Delete recordings with their review.</small></p>
   <p id="live-quote" role="status">Checking local session settings…</p>
   <ul id="live-blockers"></ul>
   <p>The selected duration is a maximum, not a promise that free allowances cover the full interview. Providers determine available free credits and rate limits. The app stops on exhausted allowance, rate-limit or access errors. Provider requests are never automatically retried.</p>
@@ -82,7 +83,15 @@
 <div class="status-row"><button id="open-profile" class="quiet">Professional profile &amp; CVs</button><span id="assembly">AssemblyAI: not connected</span><span id="groq">Groq: not checked</span><button id="refresh" class="text-button">Refresh devices</button></div>
 <p id="notice" role="status">Ready. No audio is captured until you start a session or test.</p><p id="error" role="alert" hidden></p>
 <details class="panel copilot-tool"><summary>Live latency diagnostics</summary><p>Measured stage times since session start. Audio quality and provider end-of-turn settings are unchanged.</p><pre id="live-latency"></pre><details><summary>Last Groq failure · safe diagnostic details</summary><pre id="provider-error-diagnostic"></pre></details></details>
-<div class="workspace"><section class="panel transcript-panel"><div class="section-top"><div><h2>Transcript</h2></div><button id="clear" class="quiet">Clear transcript</button></div><div id="transcript" class="transcript transcript-sources">
+<p id="wrapup-notice" role="status" hidden>The interview appears to be ending. Live capture is still running. <button id="wrapup-stop" type="button">STOP ALL and keep review</button></p>
+<p id="current-question" class="source-note" role="status"></p>
+<details class="panel"><summary>Interview review archive</summary>
+<p>Full-session text, linked questions and answers, routing decisions, errors and timing records stay on this Mac. Mac/phone receipts distinguish new delivery from replay; missing receipts are not assumed fast. Browser callbacks are not proof of physical screen paint.</p>
+<button id="review-refresh" type="button">Refresh saved interviews</button><select id="review-select" aria-label="Saved interview"></select>
+<button id="review-open" type="button">View full review</button><button id="review-export" type="button">Download full review JSON</button><button id="review-delete" type="button">Delete selected review</button>
+<p id="review-message" role="status"></p><pre id="review-content" style="white-space: pre-wrap; max-height: 30rem; overflow: auto"></pre>
+<div id="review-audio"></div></details>
+<div class="workspace"><section class="panel transcript-panel"><div class="section-top"><div><h2>Transcript</h2></div><button id="download-review" class="quiet">Download review</button><button id="clear" class="quiet">Clear transcript &amp; answers</button></div><p>STOP ALL keeps your review. The live display shows recent turns; the review archive keeps the full recorded session within its reported limits. New interviews keep previous archives until you delete them.</p><p id="speaker-note" role="status"></p><div id="transcript" class="transcript transcript-sources">
   <section><h3>Interviewer</h3><div id="transcript-interviewer" class="source-turns"></div></section>
   <section><h3>You</h3><div id="transcript-me" class="source-turns"></div></section>
 </div></section>
